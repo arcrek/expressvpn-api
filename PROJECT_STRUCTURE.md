@@ -4,31 +4,24 @@
 expressvpn-api/
 │
 ├── 📄 Configuration Files
-│   ├── package.json              # Node.js dependencies and scripts
-│   ├── .env.example              # Environment variables template
-│   ├── .gitignore                # Git ignore rules
-│   ├── .dockerignore             # Docker ignore rules
-│   ├── Dockerfile                # Docker image configuration
-│   └── docker-compose.yml        # Docker Compose orchestration
+│   ├── package.json                        # Node.js dependencies and scripts
+│   ├── env.example                         # Environment variables template
+│   ├── .gitignore                          # Git ignore rules
+│   ├── .dockerignore                       # Docker ignore rules
+│   ├── Dockerfile                          # Docker image configuration
+│   ├── docker-compose.yml                  # Docker Compose for local dev + Portainer
+│   └── docker-compose.portainer-stack.yml  # Portainer stack deployment
 │
 ├── 📚 Documentation
 │   ├── README.md                 # Full project documentation
-│   ├── QUICKSTART.md             # Quick setup guide
 │   ├── PROJECT_STRUCTURE.md      # This file
-│   ├── plan.mdc                  # Technical implementation plan
 │   └── api.md                    # Original API specification
-│
-├── 🛠️ Setup Scripts
-│   ├── setup.bat                 # Windows setup script
-│   └── setup.sh                  # Linux/Mac setup script
-│
-├── 📝 Sample Data
-│   └── sample-products.txt       # Sample products for testing
 │
 ├── 🗄️ Database
 │   └── data/                     # SQLite database storage
 │       ├── .gitkeep              # Keep directory in git
-│       └── products.db           # SQLite database (created at runtime)
+│       ├── products.db           # Main database (products, api_keys, settings)
+│       └── sessions.db           # Session store (created at runtime)
 │
 ├── 💻 Backend Source Code
 │   └── src/
@@ -37,7 +30,7 @@ expressvpn-api/
 │       │   └── init-database.js  # Database initialization script
 │       │
 │       ├── 📁 middleware/        # Express middleware
-│       │   └── auth.js           # API key & dashboard authentication
+│       │   └── auth.js           # API key & session authentication
 │       │
 │       ├── 📁 utils/             # Utility functions
 │       │   ├── cache.js          # In-memory caching
@@ -49,12 +42,22 @@ expressvpn-api/
 │       │
 │       ├── 📁 routes/            # Express routes
 │       │   ├── api.js            # Main API endpoints
-│       │   └── dashboard.js      # Dashboard API endpoints
+│       │   ├── dashboard.js      # Dashboard API endpoints
+│       │   ├── settings.js       # Settings API endpoints
+│       │   └── apiKeys.js        # API key management endpoints
+│       │
+│       ├── 📁 services/          # Business services
+│       │   ├── telegram.js       # Telegram bot integration
+│       │   ├── stockChecker.js   # Periodic stock monitoring
+│       │   ├── activityMonitor.js # Real-time activity notifications
+│       │   ├── settings.js       # Settings management
+│       │   └── apiKeys.js        # API key service
 │       │
 │       └── server.js             # Main application entry point
 │
 └── 🎨 Frontend Dashboard
     └── public/
+        ├── login.html            # Login page
         ├── index.html            # Dashboard HTML
         ├── 📁 css/
         │   └── style.css         # Dashboard styles
@@ -70,7 +73,9 @@ expressvpn-api/
 #### `src/server.js`
 - Main Express application entry point
 - Server configuration and middleware setup
-- Route registration
+- SQLite-based session management (connect-sqlite3)
+- Route registration (API, Dashboard, Settings, API Keys)
+- Telegram bot and stock checker initialization
 - Error handling
 
 #### `src/config/database.js`
@@ -82,17 +87,20 @@ expressvpn-api/
 #### `src/controllers/inventory.js`
 - Get inventory count (with caching)
 - Get products and mark as sold (transactional)
+- Triggers instant notification when products are sold
 - Main API logic as per api.md specification
 
 #### `src/controllers/products.js`
-- Upload products from text
+- Upload products from text (triggers instant notification)
 - List products with filters
 - Delete single/multiple products
+- Delete unsold products by upload date
 - Get statistics
 
 #### `src/middleware/auth.js`
-- API key validation for API endpoints
-- Basic authentication for dashboard
+- Multiple API key validation for API endpoints (from database)
+- Session-based authentication for dashboard
+- Request type detection (API vs Dashboard)
 - Security middleware
 
 #### `src/routes/api.js`
@@ -104,26 +112,78 @@ expressvpn-api/
 - `/api/stats` for dashboard statistics
 - File upload handling
 
+#### `src/routes/settings.js`
+- Telegram notification settings (bot token, chat ID, thresholds)
+- Custom message headers and footers
+- Enable/disable notification types
+
+#### `src/routes/apiKeys.js`
+- API key CRUD operations
+- Import custom API keys
+- Activate/deactivate keys
+- Usage tracking
+
+#### `src/services/telegram.js`
+- Telegram bot message sending
+- Message formatting with UTC+7 timestamps
+- Custom header/footer support
+- Notification templates
+
+#### `src/services/stockChecker.js`
+- Periodic stock level monitoring (cron-based)
+- Low stock alerts
+- Out of stock alerts
+- Duplicate notification prevention
+
+#### `src/services/activityMonitor.js`
+- Real-time product addition notifications
+- Real-time product sale notifications
+- Event-driven alerts (instant)
+
+#### `src/services/settings.js`
+- Application settings storage and retrieval
+- Default settings management
+- Settings persistence
+
+#### `src/services/apiKeys.js`
+- API key validation
+- Key usage tracking
+- Multiple active key support
+- Last used timestamp tracking
+
 ### Frontend Files
+
+#### `public/login.html`
+- Clean, modern login page
+- Session-based authentication
+- Auto-redirect after successful login
 
 #### `public/index.html`
 - Modern, responsive dashboard UI
 - Statistics cards
 - Product upload forms
-- Product management table
+- Product management table (scrollable, paginated)
 - Recent activity sections
+- Telegram notification settings
+- API key management interface
+- Delete by date functionality
 
 #### `public/css/style.css`
 - Modern, gradient design
 - Responsive layout
 - Card-based UI components
 - Professional styling
+- Modal dialogs
+- Scrollable tables
 
 #### `public/js/app.js`
 - Dashboard interactivity
 - AJAX calls to backend API
 - Real-time updates
 - Form handling and validation
+- Telegram settings management
+- API key CRUD operations
+- Session management
 
 ### Docker Files
 
@@ -161,9 +221,10 @@ expressvpn-api/
 - **server.js**: Compression and optimization middleware
 
 ### Security Features
-- **auth.js**: API key + Basic auth implementation
+- **auth.js**: Multiple API key + Session-based authentication
 - **validator.js**: Input sanitization and validation
 - **server.js**: Helmet.js security headers, rate limiting
+- **apiKeys.js**: Secure API key management and validation
 
 ### Transaction Safety
 - **database.js**: WAL mode for concurrency
@@ -174,20 +235,50 @@ expressvpn-api/
 - **app.js**: Real-time updates and notifications
 - **style.css**: Modern, intuitive UI design
 - **index.html**: Comprehensive dashboard features
+- **login.html**: Clean authentication experience
+
+### Notification & Monitoring
+- **telegram.js**: Telegram bot integration with custom messages
+- **stockChecker.js**: Periodic stock monitoring with smart alerting
+- **activityMonitor.js**: Instant notifications for add/sell events
+- **settings.js**: Centralized configuration management
+
+### Session Management
+- **server.js**: SQLite-based session storage (connect-sqlite3)
+- **sessions.db**: Persistent session data (not in-memory)
 
 ## 📊 Data Flow
 
 ### API Request Flow
 ```
-Client → server.js → middleware/auth.js → routes/api.js 
-  → controllers/inventory.js → config/database.js → SQLite
+Client → server.js → middleware/auth.js (validates API key from database)
+  → routes/api.js → controllers/inventory.js 
+  → config/database.js → SQLite
+  → (if sold) activityMonitor.notifyProductSold → telegram.js
 ```
 
 ### Dashboard Flow
 ```
-Browser → public/index.html → public/js/app.js 
-  → server.js → middleware/auth.js → routes/dashboard.js
-  → controllers/products.js → config/database.js → SQLite
+Browser → public/login.html → server.js (session authentication)
+  → public/index.html → public/js/app.js 
+  → server.js → middleware/auth.js (checks session)
+  → routes/dashboard.js → controllers/products.js 
+  → config/database.js → SQLite
+```
+
+### Notification Flow (Real-time)
+```
+Product Upload/Sale → activityMonitor.notifyProductAdded/Sold
+  → settings.js (check if enabled) → telegram.js 
+  → Telegram Bot API → User's Telegram
+```
+
+### Notification Flow (Periodic)
+```
+Cron Job (stockChecker.js) → Check stock level
+  → Compare with threshold → telegram.js (if alert needed)
+  → Telegram Bot API → User's Telegram
+  (Duplicate prevention via state tracking)
 ```
 
 ## 🔄 Typical Operations
@@ -209,10 +300,35 @@ External System → /input?key=X&order_id=Y&quantity=Z
 
 ### Delete Products
 ```
-Dashboard UI → app.js (deleteProduct/bulkDelete)
-  → /api/products/:id or /api/products/bulk-delete
+Dashboard UI → app.js (deleteProduct/bulkDelete/deleteByDate)
+  → /api/products/:id or /api/products/bulk-delete or /api/products/delete-by-date
   → products.js → database.js → SQLite 
   → Response → UI Refresh
+```
+
+### Import API Key
+```
+Dashboard UI → app.js (importApiKey modal)
+  → /api/api-keys → routes/apiKeys.js
+  → services/apiKeys.js (validate & insert)
+  → database.js → SQLite → Response → UI Refresh
+```
+
+### Configure Telegram Notifications
+```
+Dashboard UI → app.js (saveTelegramSettings)
+  → /api/settings/telegram → routes/settings.js
+  → services/settings.js (save config)
+  → database.js → SQLite
+  → stockChecker.js updates interval if changed
+```
+
+### Test Telegram Connection
+```
+Dashboard UI → app.js (testTelegram button)
+  → /api/settings/telegram/test → routes/settings.js
+  → telegram.js (send test message)
+  → Telegram Bot API → Response (success/failure)
 ```
 
 ## 🛠️ Extensibility Points
@@ -239,12 +355,21 @@ Dashboard UI → app.js (deleteProduct/bulkDelete)
 2. Apply to routes as needed
 3. Update frontend if necessary
 
+### Adding New Notification Channels
+1. Create new service in `src/services/` (e.g., `discord.js`, `slack.js`)
+2. Add configuration in `src/services/settings.js`
+3. Integrate in `activityMonitor.js` and `stockChecker.js`
+4. Add UI controls in dashboard
+
+### Customizing Notification Logic
+1. Modify `src/services/activityMonitor.js` for instant alerts
+2. Modify `src/services/stockChecker.js` for periodic checks
+3. Update message templates in `src/services/telegram.js`
+4. Add new notification types in settings schema
+
+### Changing Session Store
+1. Update session configuration in `src/server.js`
+2. Choose from: Redis, MongoDB, PostgreSQL stores
+3. Update dependencies in `package.json`
+
 ---
-
-**This structure is optimized for:**
-- ✅ Fast development
-- ✅ Easy maintenance
-- ✅ Clear separation of concerns
-- ✅ Scalability up to 200 products
-- ✅ Docker deployment
-
