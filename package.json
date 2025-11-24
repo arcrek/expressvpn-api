@@ -1,0 +1,31 @@
+{
+  "name": "expressvpn-api",
+  "version": "1.0.0",
+  "description": "Lightweight inventory management API with dashboard",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "init-db": "node src/config/init-database.js"
+  },
+  "keywords": ["api", "inventory", "express", "sqlite"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.18.2",
+    "sqlite3": "^5.1.7",
+    "dotenv": "^16.3.1",
+    "multer": "^1.4.5-lts.1",
+    "express-rate-limit": "^7.1.5",
+    "helmet": "^7.1.0",
+    "cors": "^2.8.5",
+    "compression": "^1.7.4",
+    "express-session": "^1.18.0",
+    "connect-sqlite3": "^0.9.13",
+    "cookie-parser": "^1.4.6"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}
+

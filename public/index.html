@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Product Inventory Dashboard</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
+                <div>
+                    <h1>📦 Product Inventory Dashboard</h1>
+                    <p class="subtitle">Manage your product inventory with ease</p>
+                </div>
+                <button onclick="logout()" class="btn btn-secondary" style="margin-top: 10px;">
+                    🚪 Logout
+                </button>
+            </div>
+        </header>
+
+        <!-- Statistics Cards -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon">📊</div>
+                <div class="stat-content">
+                    <div class="stat-value" id="totalProducts">0</div>
+                    <div class="stat-label">Total Products</div>
+                </div>
+            </div>
+            <div class="stat-card success">
+                <div class="stat-icon">✅</div>
+                <div class="stat-content">
+                    <div class="stat-value" id="availableProducts">0</div>
+                    <div class="stat-label">Available</div>
+                </div>
+            </div>
+            <div class="stat-card warning">
+                <div class="stat-icon">🔥</div>
+                <div class="stat-content">
+                    <div class="stat-value" id="soldProducts">0</div>
+                    <div class="stat-label">Sold</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Upload Section -->
+        <div class="card">
+            <h2>📤 Upload Products</h2>
+            <div class="upload-section">
+                <div class="upload-method">
+                    <h3>Upload from File</h3>
+                    <input type="file" id="fileInput" accept=".txt" class="file-input">
+                    <button onclick="uploadFile()" class="btn btn-primary">Upload File</button>
+                </div>
+                <div class="upload-method">
+                    <h3>Paste Text</h3>
+                    <textarea id="textInput" placeholder="Enter products (one per line)&#10;Product 1&#10;Product 2&#10;Product 3..." rows="5"></textarea>
+                    <button onclick="uploadText()" class="btn btn-primary">Upload Text</button>
+                </div>
+            </div>
+            <div id="uploadResult" class="result"></div>
+        </div>
+
+        <!-- Products List -->
+        <div class="card">
+            <div class="card-header">
+                <h2>📋 Products List</h2>
+                <div class="controls">
+                    <select id="statusFilter" onchange="filterProducts()" class="select">
+                        <option value="all">All Products</option>
+                        <option value="available">Available Only</option>
+                        <option value="sold">Sold Only</option>
+                    </select>
+                    <button onclick="refreshProducts()" class="btn btn-secondary">🔄 Refresh</button>
+                    <button onclick="showDeleteByDateModal()" class="btn btn-danger">📅 Delete by Date</button>
+                    <button onclick="bulkDelete()" class="btn btn-danger" id="bulkDeleteBtn" style="display:none;">🗑️ Delete Selected</button>
+                </div>
+            </div>
+            
+            <div class="table-container">
+                <table class="table" id="productsTable">
+                    <thead>
+                        <tr>
+                            <th><input type="checkbox" id="selectAll" onchange="toggleSelectAll()"></th>
+                            <th>ID</th>
+                            <th>Product</th>
+                            <th>Upload Date</th>
+                            <th>Status</th>
+                            <th>Order ID</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="productsBody">
+                        <tr>
+                            <td colspan="7" class="loading">Loading products...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Recent Activity -->
+        <div class="grid-2">
+            <div class="card">
+                <h2>📥 Recent Uploads</h2>
+                <div id="recentUploads" class="activity-list">
+                    <div class="loading">Loading...</div>
+                </div>
+            </div>
+            <div class="card">
+                <h2>💰 Recent Sales</h2>
+                <div id="recentSales" class="activity-list">
+                    <div class="loading">Loading...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast"></div>
+
+    <!-- Delete by Date Modal -->
+    <div id="deleteByDateModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>📅 Delete Unsold Products by Upload Date</h2>
+                <button onclick="closeDeleteByDateModal()" class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>Delete all <strong>unsold products</strong> uploaded before a specific date.</p>
+                <div class="form-group">
+                    <label for="deleteBeforeDate">Delete products uploaded before:</label>
+                    <input type="date" id="deleteBeforeDate" class="date-input">
+                </div>
+                <div class="alert" id="deleteByDateInfo" style="display: block; background: #fef3c7; color: #92400e; border-color: #fde68a;">
+                    ⚠️ This will only delete <strong>available/unsold</strong> products. Sold products will not be deleted.
+                </div>
+                <div id="deleteByDatePreview"></div>
+            </div>
+            <div class="modal-footer">
+                <button onclick="closeDeleteByDateModal()" class="btn btn-secondary">Cancel</button>
+                <button onclick="previewDeleteByDate()" class="btn btn-primary">🔍 Preview</button>
+                <button onclick="confirmDeleteByDate()" class="btn btn-danger" id="confirmDeleteBtn" style="display:none;">🗑️ Confirm Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/app.js"></script>
+</body>
+</html>
+

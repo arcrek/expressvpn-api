@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  expressvpn-api:
+    image: expressvpn-api:latest
+    container_name: expressvpn-api
+    ports:
+      - "3000:3000"
+    volumes:
+      - expressvpn_data:/app/data
+    environment:
+      # API Configuration
+      - API_KEY=17e7068f-f366-4120-83e3-e0ec1212da49
+      - PORT=3000
+      - NODE_ENV=production
+      
+      # Database Configuration
+      - DB_PATH=/app/data/products.db
+      
+      # Dashboard Authentication
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=changeme123
+      
+      # Session Secret
+      - SESSION_SECRET=change-this-to-a-random-secret-key-in-production
+      
+      # Performance
+      - ENABLE_CACHE=true
+      - CACHE_TTL=60
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    labels:
+      - "com.portainer.description=ExpressVPN API - Product Inventory Management System"
+      - "com.portainer.version=1.0.0"
+
+volumes:
+  expressvpn_data:
+    driver: local
+
+networks:
+  default:
+    driver: bridge
+

@@ -1,0 +1,33 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: expressvpn-api
+    ports:
+      - "3000:3000"
+    volumes:
+      # Mount data directory for database persistence
+      - ./data:/app/data
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    env_file:
+      - .env  # Create this file from env.example
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  data:
+
