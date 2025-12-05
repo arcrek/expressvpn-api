@@ -1,13 +1,54 @@
+# Dependencies
 node_modules
 npm-debug.log
+# Note: package-lock.json is needed for npm ci, so don't ignore it
+
+# Environment and secrets
 .env
+.env.local
+.env.*.local
+
+# Git
 .git
 .gitignore
-README.md
+.gitattributes
+
+# Documentation (not needed in image)
+*.md
+docs/
+
+# Database files (should be in volumes)
 data/*.db
 data/*.db-wal
 data/*.db-shm
-*.md
+data/
+
+# IDE
 .vscode
 .idea
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# CI/CD
+.github
+.gitlab-ci.yml
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+tmp/
+temp/
+.cache
 

@@ -1,13 +1,16 @@
+version: '3.8'
+
 services:
-  api:
+  product-manager:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: expressvpn-api
+    container_name: product-manager
     ports:
       - "3000:3000"
     volumes:
       # Mount data directory for database persistence
+      # Note: Ensure proper permissions (chown -R 1001:1001 ./data)
       - ./data:/app/data
     environment:
       - NODE_ENV=production
@@ -23,11 +26,20 @@ services:
       start_period: 10s
     networks:
       - app-network
+    # Security: Non-root user is set in Dockerfile (nodejs:1001)
+    # Resource limits (optional but recommended)
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
 
 networks:
   app-network:
     driver: bridge
 
-volumes:
-  data:
-
+# Note: Named volumes are not used here to allow easy access to data directory
+# For production, consider using named volumes for better isolation

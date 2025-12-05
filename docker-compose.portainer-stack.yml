@@ -1,16 +1,15 @@
 version: '3.8'
 
 services:
-  expressvpn-api:
-    image: expressvpn-api:latest
-    container_name: expressvpn-api
+  product-manager:
+    image: product-manager:latest
+    container_name: product-manager
     ports:
       - "3000:3000"
     volumes:
-      - expressvpn_data:/app/data
+      - product_manager_data:/app/data
     environment:
       # API Configuration
-      - API_KEY=17e7068f-f366-4120-83e3-e0ec1212da49
       - PORT=3000
       - NODE_ENV=production
       
@@ -21,12 +20,16 @@ services:
       - ADMIN_USERNAME=admin
       - ADMIN_PASSWORD=changeme123
       
-      # Session Secret
+      # Session Secret (CHANGE THIS IN PRODUCTION!)
       - SESSION_SECRET=change-this-to-a-random-secret-key-in-production
       
       # Performance
       - ENABLE_CACHE=true
       - CACHE_TTL=60
+      
+      # Telegram Notifications (optional)
+      # - TELEGRAM_BOT_TOKEN=your-bot-token
+      # - TELEGRAM_CHAT_ID=your-chat-id
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
@@ -34,15 +37,34 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+    # Security: Non-root user is set in Dockerfile (nodejs:1001)
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
     labels:
-      - "com.portainer.description=ExpressVPN API - Product Inventory Management System"
-      - "com.portainer.version=1.0.0"
+      - "com.portainer.description=Product Manager - Multi-Inventory Management System"
+      - "com.portainer.version=2.0.0"
+      - "com.portainer.category=api"
+      - "com.portainer.icon=https://raw.githubusercontent.com/docker-library/docs/master/nodejs/logo.png"
 
 volumes:
-  expressvpn_data:
+  product_manager_data:
     driver: local
+    # Note: Named volumes automatically have correct permissions
+    # If using bind mount, ensure /app/data is writable by UID 1001 (nodejs user)
+    # Optional: Use named volume with specific driver for production
+    # driver_opts:
+    #   type: none
+    #   o: bind
+    #   device: /path/to/persistent/storage
+    #   o: uid=1001,gid=1001
 
 networks:
   default:
     driver: bridge
-

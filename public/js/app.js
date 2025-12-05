@@ -761,8 +761,19 @@ async function saveTelegramSettings() {
         telegram_bot_token: val('telegram_bot_token'),
         telegram_chat_id: val('telegram_chat_id'),
         telegram_header: val('telegram_header'),
-        telegram_footer: val('telegram_footer'),
-        stock_threshold: parseInt(val('stock_threshold')),
+        telegram_footer: val('telegram_footer')
+    };
+    
+    try {
+        await apiCall('/api/settings', 'POST', settings);
+        showToast('Telegram settings saved', 'success');
+        loadSettings(); // Reload to refresh UI
+    } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function saveStockSettings() {
+    const settings = {
+        stock_threshold: parseInt(val('stock_threshold')) || 10,
         check_interval: val('check_interval'),
         notify_on_add: document.getElementById('notify_on_add').checked,
         notify_on_sold: document.getElementById('notify_on_sold').checked
@@ -770,8 +781,38 @@ async function saveTelegramSettings() {
     
     try {
         await apiCall('/api/settings', 'POST', settings);
-        showToast('Settings saved', 'success');
+        showToast('Stock monitoring settings saved', 'success');
+        loadSettings(); // Reload to refresh UI
     } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function testTelegram() {
+    const botToken = val('telegram_bot_token');
+    const chatId = val('telegram_chat_id');
+    const header = val('telegram_header');
+    const footer = val('telegram_footer');
+    
+    if (!botToken || !chatId) {
+        return showToast('Please enter Bot Token and Chat ID', 'error');
+    }
+    
+    try {
+        showToast('Testing Telegram connection...', 'info');
+        const data = await apiCall('/api/settings/telegram/test', 'POST', {
+            bot_token: botToken,
+            chat_id: chatId,
+            header: header,
+            footer: footer
+        });
+        
+        if (data.success) {
+            showToast('Test message sent successfully!', 'success');
+        } else {
+            showToast(data.error || 'Test failed', 'error');
+        }
+    } catch (e) {
+        showToast(e.message || 'Failed to test Telegram', 'error');
+    }
 }
 
 async function checkStockNow() {
@@ -808,6 +849,20 @@ function updateMonitorUI(checker) {
         badge.className = 'status-badge';
         btn.textContent = 'Start Monitor';
         btn.className = 'btn btn-primary';
+    }
+}
+
+async function updateMonitorStatus() {
+    try {
+        const res = await fetch('/api/settings');
+        if (res.status === 401) return;
+        const data = await res.json();
+        if (data.checker) {
+            updateMonitorUI(data.checker);
+        }
+    } catch (err) {
+        // Silently fail for background polling
+        console.error('Failed to update monitor status:', err);
     }
 }
 
