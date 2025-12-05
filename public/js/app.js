@@ -1,1010 +1,787 @@
-// Global state
-let selectedProducts = new Set();
-let allProducts = [];
+/**
+ * ExpressVPN API Dashboard
+ * Modern SPA-like interactive dashboard
+ */
 
-// Initialize dashboard
+// --- State ---
+const state = {
+    activeTab: 'dashboard',
+    products: [],
+    inventories: [],
+    keys: [],
+    stats: {},
+    selectedProducts: new Set(),
+    theme: localStorage.getItem('theme') || 'light'
+};
+
+// --- Initialization ---
 document.addEventListener('DOMContentLoaded', () => {
-    loadStats();
-    loadProducts();
-    loadTelegramSettings();
-    loadApiKeys();
+    initTheme();
+    setupNavigation();
+    loadInitialData();
+    
+    // Setup global event listeners
+    document.getElementById('dropZone')?.addEventListener('click', () => document.getElementById('fileInput').click());
+    document.getElementById('fileInput')?.addEventListener('change', handleFileSelect);
+    
+    // Start polling for stock monitor status
+    setInterval(updateMonitorStatus, 30000);
 });
 
-// Logout function
-async function logout() {
-    if (!confirm('Are you sure you want to logout?')) {
-        return;
+function initTheme() {
+    document.documentElement.setAttribute('data-theme', state.theme);
+    const icon = document.querySelector('.theme-toggle i');
+    icon.className = state.theme === 'dark' ? 'ph ph-sun' : 'ph ph-moon';
+}
+
+function toggleTheme() {
+    state.theme = state.theme === 'light' ? 'dark' : 'light';
+    localStorage.setItem('theme', state.theme);
+    initTheme();
+    // Update chart if exists
+    if (window.activityChart) {
+        updateChartTheme();
     }
+}
+
+function setupNavigation() {
+    document.querySelectorAll('.nav-item').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const tab = btn.dataset.tab;
+            switchTab(tab);
+        });
+    });
+}
+
+function switchTab(tabId) {
+    // Update sidebar
+    document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+    document.querySelector(`[data-tab="${tabId}"]`).classList.add('active');
     
-    try {
-        await fetch('/api/logout', { method: 'POST' });
-        window.location.href = '/login';
-    } catch (error) {
-        console.error('Logout error:', error);
-        window.location.href = '/login';
-    }
-}
-
-// Show toast notification
-function showToast(message, type = 'info') {
-    const toast = document.getElementById('toast');
-    toast.textContent = message;
-    toast.className = `toast ${type} show`;
+    // Update content
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.getElementById(tabId).classList.add('active');
     
-    setTimeout(() => {
-        toast.classList.remove('show');
-    }, 3000);
+    // Update page title
+    document.getElementById('pageTitle').textContent = tabId.charAt(0).toUpperCase() + tabId.slice(1);
+    
+    state.activeTab = tabId;
+    
+    // Refresh data for the tab
+    if (tabId === 'products') loadProducts();
+    if (tabId === 'inventory') loadInventories();
+    if (tabId === 'api-keys') loadApiKeys();
+    if (tabId === 'settings') loadSettings();
 }
 
-// Get auth headers
-function getAuthHeaders() {
-    // Basic auth is handled by browser
-    return {
-        'Content-Type': 'application/json'
-    };
+async function loadInitialData() {
+    await Promise.all([
+        loadInventories(),
+        loadStats(),
+        loadSettings() // Preload settings for monitor status
+    ]);
+    
+    // If inventories exist, populate filters
+    populateInventoryDropdowns();
 }
 
-// Load statistics
-async function loadStats() {
+// --- Data Loading ---
+
+async function loadInventories() {
     try {
-        const response = await fetch('/api/stats');
+        const res = await fetch('/api/inventories');
+        if (res.status === 401) return window.location.href = '/login';
+        const data = await res.json();
+        state.inventories = data.inventories;
         
-        if (response.status === 401) {
-            window.location.href = '/login';
-            return;
-        }
-        
-        if (!response.ok) {
-            throw new Error('Failed to load statistics');
-        }
-        
-        const data = await response.json();
-        
-        // Update stats cards
-        document.getElementById('totalProducts').textContent = data.stats.total;
-        document.getElementById('availableProducts').textContent = data.stats.available;
-        document.getElementById('soldProducts').textContent = data.stats.sold;
-        
-        // Update recent uploads
-        const uploadsHtml = data.recentUploads.length > 0
-            ? data.recentUploads.map(item => `
-                <div class="activity-item">
-                    <div class="activity-product">${escapeHtml(item.product)}</div>
-                    <div class="activity-meta">${formatDate(item.upload_date)}</div>
-                </div>
-            `).join('')
-            : '<div class="loading">No recent uploads</div>';
-        
-        document.getElementById('recentUploads').innerHTML = uploadsHtml;
-        
-        // Update recent sales
-        const salesHtml = data.recentSales.length > 0
-            ? data.recentSales.map(item => `
-                <div class="activity-item">
-                    <div class="activity-product">${escapeHtml(item.product)}</div>
-                    <div class="activity-meta">Order: ${escapeHtml(item.order_id)} • ${formatDate(item.sold_date)}</div>
-                </div>
-            `).join('')
-            : '<div class="loading">No recent sales</div>';
-        
-        document.getElementById('recentSales').innerHTML = salesHtml;
-        
-    } catch (error) {
-        console.error('Error loading stats:', error);
-        showToast('Failed to load statistics', 'error');
+        renderInventories();
+        populateInventoryDropdowns();
+    } catch (err) {
+        showToast('Failed to load inventories', 'error');
     }
 }
 
-// Load products
-async function loadProducts(status = 'all') {
+async function loadProducts(status = 'all', inventoryId = '') {
     try {
-        const url = status === 'all' 
-            ? '/api/products' 
-            : `/api/products?status=${status}`;
+        // Build URL
+        const filterInv = inventoryId || document.getElementById('productInventoryFilter')?.value || '';
+        const filterStatus = status === 'all' ? (document.getElementById('productStatusFilter')?.value || 'all') : status;
         
-        const response = await fetch(url);
+        let url = '/api/products';
+        const params = [];
+        if (filterStatus !== 'all') params.push(`status=${filterStatus}`);
+        if (filterInv) params.push(`inventory_id=${filterInv}`);
+        if (params.length) url += '?' + params.join('&');
         
-        if (response.status === 401) {
-            window.location.href = '/login';
-            return;
-        }
+        const res = await fetch(url);
+        const data = await res.json();
+        state.products = data.products;
         
-        if (!response.ok) {
-            throw new Error('Failed to load products');
-        }
-        
-        const data = await response.json();
-        allProducts = data.products;
-        
-        displayProducts(allProducts);
-        
-    } catch (error) {
-        console.error('Error loading products:', error);
-        document.getElementById('productsBody').innerHTML = `
-            <tr><td colspan="7" class="error">Failed to load products</td></tr>
-        `;
+        renderProducts();
+    } catch (err) {
         showToast('Failed to load products', 'error');
     }
 }
 
-// Display products in table
-function displayProducts(products) {
-    const tbody = document.getElementById('productsBody');
+async function loadStats() {
+    try {
+        const res = await fetch('/api/stats');
+        const data = await res.json();
+        state.stats = data;
+        
+        // Update Dashboard Counters
+        updateElement('totalProducts', data.stats.total);
+        updateElement('availableProducts', data.stats.available);
+        updateElement('soldProducts', data.stats.sold);
+        
+        // Update API Keys Stats (if on that tab)
+        if (state.activeTab === 'api-keys') {
+            // We might need to fetch API key stats separately or parse from here if available
+        }
+
+        renderRecentActivity(data.recentUploads, data.recentSales);
+        renderActivityChart(data.recentSales);
+    } catch (err) {
+        console.error(err);
+    }
+}
+
+async function loadApiKeys() {
+    try {
+        const res = await fetch('/api/api-keys');
+        const data = await res.json();
+        state.keys = data.keys;
+        
+        updateElement('activeKeysCount', data.stats.active);
+        updateElement('totalRequestsCount', data.stats.total_requests);
+        
+        renderApiKeys();
+    } catch (err) {
+        showToast('Failed to load API keys', 'error');
+    }
+}
+
+async function loadSettings() {
+    try {
+        const res = await fetch('/api/settings');
+        const data = await res.json();
+        
+        // Populate Form
+        const s = data.settings;
+        setVal('telegram_bot_token', s.telegram_bot_token);
+        setVal('telegram_chat_id', s.telegram_chat_id);
+        setVal('telegram_header', s.telegram_header);
+        setVal('telegram_footer', s.telegram_footer);
+        setVal('stock_threshold', s.stock_threshold);
+        setVal('check_interval', s.check_interval);
+        
+        setCheck('telegram_enabled', s.telegram_enabled);
+        setCheck('notify_on_add', s.notify_on_add !== false);
+        setCheck('notify_on_sold', s.notify_on_sold !== false);
+        
+        toggleTelegramSettings();
+        updateMonitorUI(data.checker);
+    } catch (err) {
+        console.error(err);
+    }
+}
+
+// --- Rendering ---
+
+function renderInventories() {
+    const grid = document.getElementById('inventoryGrid');
+    if (!grid) return;
     
-    if (products.length === 0) {
+    if (state.inventories.length === 0) {
+        grid.innerHTML = '<div class="empty-state">No inventories found</div>';
+        return;
+    }
+    
+    grid.innerHTML = state.inventories.map(inv => `
+        <div class="inventory-card">
+            <div class="inv-header">
+                <div class="inv-name">${escapeHtml(inv.name)}</div>
+                ${inv.id === 1 ? '<span class="badge badge-info">Default</span>' : ''}
+            </div>
+            <div class="inv-desc">${escapeHtml(inv.description || 'No description')}</div>
+            <div class="inv-stats">
+                <div class="inv-stat-item">
+                    <span class="inv-stat-val">${inv.available_products}</span>
+                    <span class="inv-stat-lbl">Available</span>
+                </div>
+                <div class="inv-stat-item">
+                    <span class="inv-stat-val">${inv.sold_products}</span>
+                    <span class="inv-stat-lbl">Sold</span>
+                </div>
+            </div>
+            <div class="inv-actions">
+                ${inv.id !== 1 ? `
+                    <button onclick="editInventory(${inv.id})" class="btn btn-text" title="Edit"><i class="ph ph-pencil"></i></button>
+                    <button onclick="deleteInventory(${inv.id})" class="btn btn-text" style="color:var(--danger)" title="Delete"><i class="ph ph-trash"></i></button>
+                ` : ''}
+                <button onclick="filterToInventory(${inv.id})" class="btn btn-text" style="margin-left:auto; color:var(--primary)">
+                    View Products <i class="ph ph-arrow-right"></i>
+                </button>
+            </div>
+        </div>
+    `).join('');
+}
+
+function renderProducts() {
+    const tbody = document.getElementById('productsBody');
+    if (!tbody) return;
+    
+    if (state.products.length === 0) {
         tbody.innerHTML = '<tr><td colspan="7" class="loading">No products found</td></tr>';
         return;
     }
     
-    const html = products.map(product => `
+    tbody.innerHTML = state.products.map(p => {
+        const inv = state.inventories.find(i => i.id === p.inventory_id);
+        const invName = inv ? inv.name : 'Unknown';
+        
+        return `
         <tr>
-            <td><input type="checkbox" class="product-checkbox" data-id="${product.id}" onchange="updateSelection()"></td>
-            <td>${product.id}</td>
-            <td title="${escapeHtml(product.product)}">${escapeHtml(truncate(product.product, 50))}</td>
-            <td>${formatDate(product.upload_date)}</td>
+            <td><input type="checkbox" class="product-check" value="${p.id}" onchange="updateBulkSelection()"></td>
             <td>
-                <span class="badge ${product.is_sold ? 'badge-warning' : 'badge-success'}">
-                    ${product.is_sold ? 'Sold' : 'Available'}
+                <div style="font-weight:500; max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(p.product)}">
+                    ${escapeHtml(p.product)}
+                </div>
+            </td>
+            <td><span class="badge badge-info">${escapeHtml(invName)}</span></td>
+            <td>
+                <span class="badge ${p.is_sold ? 'badge-warning' : 'badge-success'}">
+                    ${p.is_sold ? 'Sold' : 'Available'}
                 </span>
             </td>
-            <td>${product.order_id ? escapeHtml(product.order_id) : '-'}</td>
+            <td>${new Date(p.upload_date).toLocaleDateString()}</td>
+            <td><small>${p.order_id || '-'}</small></td>
             <td>
-                <button onclick="deleteProduct(${product.id})" class="btn btn-danger btn-small">Delete</button>
+                <button onclick="deleteProduct(${p.id})" class="btn btn-icon" style="color:var(--danger)"><i class="ph ph-trash"></i></button>
             </td>
         </tr>
+    `}).join('');
+}
+
+function renderApiKeys() {
+    const tbody = document.getElementById('apiKeysBody');
+    if (!tbody) return;
+    
+    tbody.innerHTML = state.keys.map(k => {
+        const invName = k.inventory_name || '-';
+        const typeBadge = k.is_kiosk 
+            ? `<span class="badge badge-warning"><i class="ph ph-storefront"></i> Kiosk</span>`
+            : `<span class="badge badge-info"><i class="ph ph-globe"></i> Full</span>`;
+            
+        return `
+        <tr>
+            <td>
+                <div style="font-weight:600">${escapeHtml(k.name)}</div>
+                <div class="key-preview" onclick="copyToClipboard('${k.key}')" title="Click to copy">
+                    ${k.key.substring(0, 12)}...
+                </div>
+            </td>
+            <td>${typeBadge}</td>
+            <td>${k.is_kiosk ? invName : '-'}</td>
+            <td>
+                <span class="badge ${k.is_active ? 'badge-success' : 'badge-gray'}">
+                    ${k.is_active ? 'Active' : 'Inactive'}
+                </span>
+            </td>
+            <td>${k.usage_count}</td>
+            <td>${new Date(k.created_at).toLocaleDateString()}</td>
+            <td>
+                <button onclick="toggleKey(${k.id}, ${!k.is_active})" class="btn btn-icon">
+                    <i class="ph ${k.is_active ? 'ph-pause' : 'ph-play'}"></i>
+                </button>
+                <button onclick="editKey(${k.id})" class="btn btn-icon"><i class="ph ph-pencil"></i></button>
+                <button onclick="deleteKey(${k.id})" class="btn btn-icon" style="color:var(--danger)"><i class="ph ph-trash"></i></button>
+            </td>
+        </tr>
+    `}).join('');
+}
+
+function renderRecentActivity(uploads, sales) {
+    const list = document.getElementById('recentActivityList');
+    if (!list) return;
+    
+    // Combine and sort by date
+    const activities = [
+        ...uploads.map(u => ({ ...u, type: 'upload', date: u.upload_date })),
+        ...sales.map(s => ({ ...s, type: 'sale', date: s.sold_date }))
+    ].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 10);
+    
+    if (activities.length === 0) {
+        list.innerHTML = '<div class="empty-state">No recent activity</div>';
+        return;
+    }
+    
+    list.innerHTML = activities.map(a => `
+        <div class="activity-item">
+            <div class="activity-icon" style="color: ${a.type === 'sale' ? 'var(--warning)' : 'var(--primary)'}">
+                <i class="ph ${a.type === 'sale' ? 'ph-shopping-cart' : 'ph-upload-simple'}"></i>
+            </div>
+            <div class="activity-details">
+                <span class="activity-text">
+                    ${a.type === 'sale' ? 'Product Sold' : 'Product Added'}
+                </span>
+                <span class="activity-time">${new Date(a.date).toLocaleString()}</span>
+            </div>
+        </div>
     `).join('');
-    
-    tbody.innerHTML = html;
 }
 
-// Upload file
-async function uploadFile() {
-    const fileInput = document.getElementById('fileInput');
-    const file = fileInput.files[0];
+function renderActivityChart(sales) {
+    const ctx = document.getElementById('activityChart');
+    if (!ctx || !sales.length) return;
     
-    if (!file) {
-        showToast('Please select a file', 'error');
-        return;
+    // Group sales by day for the last 7 days
+    const days = {};
+    for (let i = 6; i >= 0; i--) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        days[d.toLocaleDateString()] = 0;
     }
     
-    const formData = new FormData();
-    formData.append('file', file);
+    sales.forEach(s => {
+        const date = new Date(s.sold_date).toLocaleDateString();
+        if (days[date] !== undefined) days[date]++;
+    });
+    
+    if (window.activityChart instanceof Chart) {
+        window.activityChart.destroy();
+    }
+    
+    window.activityChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: Object.keys(days).map(d => d.split('/')[0] + '/' + d.split('/')[1]),
+            datasets: [{
+                label: 'Sales',
+                data: Object.values(days),
+                borderColor: '#6366f1',
+                backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                fill: true,
+                tension: 0.4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false }
+            },
+            scales: {
+                y: { beginAtZero: true, ticks: { stepSize: 1 } }
+            }
+        }
+    });
+}
+
+function updateChartTheme() {
+    // Re-render chart to pick up font colors if we were doing complex theming, 
+    // but basic chart.js adapts reasonably well.
+}
+
+// --- Actions ---
+
+// Inventories
+function showCreateInventoryModal() { openModal('createInventoryModal'); }
+
+async function createInventory() {
+    const name = val('invName');
+    const description = val('invDesc');
+    
+    if (!name) return showToast('Name required', 'error');
     
     try {
-        const response = await fetch('/api/products/upload', {
-            method: 'POST',
-            body: formData
-        });
-        
-        // Check if we got HTML (redirect to login)
-        const contentType = response.headers.get('content-type');
-        if (!contentType || !contentType.includes('application/json')) {
-            window.location.href = '/login';
-            return;
-        }
-        
-        const data = await response.json();
-        
-        if (!response.ok) {
-            if (response.status === 401) {
-                window.location.href = '/login';
-                return;
-            }
-            throw new Error(data.error || 'Upload failed');
-        }
-        
-        const resultDiv = document.getElementById('uploadResult');
-        resultDiv.className = 'result success';
-        resultDiv.textContent = `✓ Successfully uploaded ${data.inserted} products${data.skipped > 0 ? ` (${data.skipped} skipped)` : ''}`;
-        
-        showToast(`Successfully uploaded ${data.inserted} products`, 'success');
-        
-        // Reset and refresh
-        fileInput.value = '';
-        loadStats();
-        loadProducts();
-        
-    } catch (error) {
-        console.error('Error uploading file:', error);
-        const resultDiv = document.getElementById('uploadResult');
-        resultDiv.className = 'result error';
-        resultDiv.textContent = `✗ ${error.message}`;
-        showToast(error.message, 'error');
-    }
+        await apiCall('/api/inventories', 'POST', { name, description });
+        closeModal('createInventoryModal');
+        loadInventories();
+        showToast('Inventory created', 'success');
+    } catch (e) { showToast(e.message, 'error'); }
 }
 
-// Upload text
-async function uploadText() {
-    const textInput = document.getElementById('textInput');
-    const products = textInput.value;
-    
-    if (!products.trim()) {
-        showToast('Please enter products', 'error');
-        return;
-    }
-    
+async function deleteInventory(id) {
+    if (!confirm('Delete inventory? Cannot initiate if products exist.')) return;
     try {
-        const response = await fetch('/api/products/upload-text', {
-            method: 'POST',
-            headers: getAuthHeaders(),
-            body: JSON.stringify({ products })
-        });
-        
-        // Check if response is JSON
-        const contentType = response.headers.get('content-type');
-        if (!contentType || !contentType.includes('application/json')) {
-            window.location.href = '/login';
-            return;
-        }
-        
-        const data = await response.json();
-        
-        if (!response.ok) {
-            if (response.status === 401) {
-                window.location.href = '/login';
-                return;
-            }
-            throw new Error(data.error || 'Upload failed');
-        }
-        
-        const resultDiv = document.getElementById('uploadResult');
-        resultDiv.className = 'result success';
-        resultDiv.textContent = `✓ Successfully uploaded ${data.inserted} products${data.skipped > 0 ? ` (${data.skipped} skipped)` : ''}`;
-        
-        showToast(`Successfully uploaded ${data.inserted} products`, 'success');
-        
-        // Reset and refresh
-        textInput.value = '';
-        loadStats();
-        loadProducts();
-        
-    } catch (error) {
-        console.error('Error uploading text:', error);
-        const resultDiv = document.getElementById('uploadResult');
-        resultDiv.className = 'result error';
-        resultDiv.textContent = `✗ ${error.message}`;
-        showToast(error.message, 'error');
+        await apiCall(`/api/inventories/${id}`, 'DELETE');
+        loadInventories();
+        showToast('Inventory deleted', 'success');
+    } catch (e) { showToast(e.message, 'error'); }
+}
+
+function filterToInventory(id) {
+    switchTab('products');
+    const select = document.getElementById('productInventoryFilter');
+    if (select) {
+        select.value = id;
+        filterProducts();
     }
 }
 
-// Filter products
+// Products
 function filterProducts() {
-    const status = document.getElementById('statusFilter').value;
-    loadProducts(status);
+    loadProducts();
 }
 
-// Refresh products
-function refreshProducts() {
-    const status = document.getElementById('statusFilter').value;
-    loadProducts(status);
-    loadStats();
-    showToast('Refreshed', 'info');
-}
-
-// Delete product
-async function deleteProduct(id) {
-    if (!confirm('Are you sure you want to delete this product?')) {
-        return;
-    }
+function updateBulkSelection() {
+    const checks = document.querySelectorAll('.product-check:checked');
+    const btn = document.getElementById('bulkDeleteBtn');
+    state.selectedProducts = new Set(Array.from(checks).map(c => c.value));
     
-    try {
-        const response = await fetch(`/api/products/${id}`, {
-            method: 'DELETE'
-        });
-        
-        const data = await response.json();
-        
-        if (!response.ok) {
-            throw new Error(data.error || 'Delete failed');
-        }
-        
-        showToast('Product deleted successfully', 'success');
-        loadStats();
-        loadProducts();
-        
-    } catch (error) {
-        console.error('Error deleting product:', error);
-        showToast(error.message, 'error');
-    }
+    if (btn) btn.style.display = state.selectedProducts.size > 0 ? 'inline-flex' : 'none';
 }
 
-// Toggle select all
 function toggleSelectAll() {
-    const selectAll = document.getElementById('selectAll');
-    const checkboxes = document.querySelectorAll('.product-checkbox');
-    
-    checkboxes.forEach(checkbox => {
-        checkbox.checked = selectAll.checked;
-    });
-    
-    updateSelection();
+    const all = document.getElementById('selectAll').checked;
+    document.querySelectorAll('.product-check').forEach(c => c.checked = all);
+    updateBulkSelection();
 }
 
-// Update selection
-function updateSelection() {
-    const checkboxes = document.querySelectorAll('.product-checkbox:checked');
-    selectedProducts.clear();
-    
-    checkboxes.forEach(checkbox => {
-        selectedProducts.add(parseInt(checkbox.dataset.id));
-    });
-    
-    const bulkDeleteBtn = document.getElementById('bulkDeleteBtn');
-    bulkDeleteBtn.style.display = selectedProducts.size > 0 ? 'block' : 'none';
-    
-    // Update select all checkbox
-    const allCheckboxes = document.querySelectorAll('.product-checkbox');
-    const selectAll = document.getElementById('selectAll');
-    selectAll.checked = allCheckboxes.length > 0 && checkboxes.length === allCheckboxes.length;
+async function deleteProduct(id) {
+    if (!confirm('Delete this product?')) return;
+    try {
+        await apiCall(`/api/products/${id}`, 'DELETE');
+        loadProducts(); // Refresh
+        loadStats();
+        showToast('Product deleted', 'success');
+    } catch (e) { showToast(e.message, 'error'); }
 }
 
-// Bulk delete
 async function bulkDelete() {
-    if (selectedProducts.size === 0) {
-        return;
-    }
-    
-    if (!confirm(`Are you sure you want to delete ${selectedProducts.size} products?`)) {
-        return;
-    }
+    const ids = Array.from(state.selectedProducts);
+    if (!ids.length) return;
+    if (!confirm(`Delete ${ids.length} products?`)) return;
     
     try {
-        const response = await fetch('/api/products/bulk-delete', {
-            method: 'POST',
-            headers: getAuthHeaders(),
-            body: JSON.stringify({ ids: Array.from(selectedProducts) })
-        });
-        
-        const data = await response.json();
-        
-        if (!response.ok) {
-            throw new Error(data.error || 'Bulk delete failed');
-        }
-        
-        showToast(`Successfully deleted ${data.deleted} products`, 'success');
-        
-        selectedProducts.clear();
-        document.getElementById('selectAll').checked = false;
-        loadStats();
+        await apiCall('/api/products/bulk-delete', 'POST', { ids });
+        state.selectedProducts.clear();
         loadProducts();
-        
-    } catch (error) {
-        console.error('Error bulk deleting:', error);
-        showToast(error.message, 'error');
-    }
+        loadStats();
+        showToast('Products deleted', 'success');
+    } catch (e) { showToast(e.message, 'error'); }
 }
 
-// Delete by date functionality
-let productsToDelete = [];
-
-function showDeleteByDateModal() {
-    const modal = document.getElementById('deleteByDateModal');
-    modal.classList.add('show');
-    
-    // Set default date to 7 days ago
-    const date = new Date();
-    date.setDate(date.getDate() - 7);
-    document.getElementById('deleteBeforeDate').value = date.toISOString().split('T')[0];
-    
-    // Reset preview
-    document.getElementById('deleteByDatePreview').classList.remove('show');
-    document.getElementById('confirmDeleteBtn').style.display = 'none';
+// Upload
+function showUploadModal() {
+    openModal('uploadModal');
+    switchUploadTab('file');
 }
 
-function closeDeleteByDateModal() {
-    const modal = document.getElementById('deleteByDateModal');
-    modal.classList.remove('show');
-    productsToDelete = [];
+function switchUploadTab(type) {
+    document.querySelectorAll('.upload-tab-content').forEach(c => c.classList.remove('active'));
+    document.getElementById(`upload-${type}-tab`).classList.add('active');
+    
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    // Find the button that called this... simpler to just query indices or add IDs
+    // For now, simple toggle logic:
+    const btns = document.querySelectorAll('.tabs .tab-btn');
+    if (type === 'file') { btns[0].classList.add('active'); btns[1].classList.remove('active'); }
+    else { btns[1].classList.add('active'); btns[0].classList.remove('active'); }
 }
 
-async function previewDeleteByDate() {
-    const dateInput = document.getElementById('deleteBeforeDate');
-    const selectedDate = dateInput.value;
-    
-    if (!selectedDate) {
-        showToast('Please select a date', 'error');
-        return;
-    }
+function handleFileSelect(e) {
+    const file = e.target.files[0];
+    if (file) document.getElementById('selectedFileName').textContent = file.name;
+}
+
+async function performUpload() {
+    const invId = document.getElementById('uploadInventorySelect').value;
+    const fileInput = document.getElementById('fileInput');
+    const textInput = document.getElementById('textInput');
+    const isFile = document.getElementById('upload-file-tab').classList.contains('active');
     
     try {
-        // Get all available products
-        const response = await fetch('/api/products?status=available');
-        
-        if (response.status === 401) {
-            window.location.href = '/login';
-            return;
-        }
-        
-        const data = await response.json();
-        const products = data.products;
-        
-        // Filter products uploaded before selected date
-        const selectedDateTime = new Date(selectedDate + 'T23:59:59').getTime();
-        productsToDelete = products.filter(p => {
-            const uploadTime = new Date(p.upload_date).getTime();
-            return uploadTime <= selectedDateTime;
-        });
-        
-        // Show preview
-        const previewDiv = document.getElementById('deleteByDatePreview');
-        const confirmBtn = document.getElementById('confirmDeleteBtn');
-        
-        if (productsToDelete.length === 0) {
-            previewDiv.innerHTML = `
-                <div class="preview-count" style="color: #10b981;">
-                    ✓ No unsold products found before ${formatDateShort(selectedDate)}
-                </div>
-            `;
-            previewDiv.classList.add('show');
-            confirmBtn.style.display = 'none';
+        let res;
+        if (isFile) {
+            if (!fileInput.files[0]) return showToast('Select a file', 'error');
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            formData.append('inventory_id', invId);
+            res = await fetch('/api/products/upload', { method: 'POST', body: formData });
         } else {
-            const previewItems = productsToDelete.slice(0, 10).map(p => `
-                <div class="preview-item">
-                    <strong>${escapeHtml(p.product)}</strong><br>
-                    <small>Uploaded: ${formatDate(p.upload_date)}</small>
-                </div>
-            `).join('');
-            
-            const moreText = productsToDelete.length > 10 
-                ? `<div class="preview-item"><em>...and ${productsToDelete.length - 10} more</em></div>` 
-                : '';
-            
-            previewDiv.innerHTML = `
-                <div class="preview-count">
-                    ⚠️ ${productsToDelete.length} unsold product${productsToDelete.length > 1 ? 's' : ''} will be deleted
-                </div>
-                <div class="preview-list">
-                    ${previewItems}
-                    ${moreText}
-                </div>
-            `;
-            previewDiv.classList.add('show');
-            confirmBtn.style.display = 'block';
+            const text = textInput.value;
+            if (!text.trim()) return showToast('Enter text', 'error');
+            res = await fetch('/api/products/upload-text', { 
+                method: 'POST', 
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ products: text, inventory_id: parseInt(invId) })
+            });
         }
         
-    } catch (error) {
-        console.error('Error previewing delete:', error);
-        showToast('Failed to preview products', 'error');
-    }
-}
-
-async function confirmDeleteByDate() {
-    if (productsToDelete.length === 0) {
-        return;
-    }
-    
-    const count = productsToDelete.length;
-    if (!confirm(`Are you sure you want to delete ${count} unsold product${count > 1 ? 's' : ''}?\n\nThis action cannot be undone.`)) {
-        return;
-    }
-    
-    try {
-        const ids = productsToDelete.map(p => p.id);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
         
-        const response = await fetch('/api/products/bulk-delete', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ids })
-        });
-        
-        if (response.status === 401) {
-            window.location.href = '/login';
-            return;
-        }
-        
-        const data = await response.json();
-        
-        if (!response.ok) {
-            throw new Error(data.error || 'Delete failed');
-        }
-        
-        showToast(`Successfully deleted ${data.deleted} products`, 'success');
-        
-        closeDeleteByDateModal();
-        loadStats();
+        showToast(`Uploaded ${data.inserted} products`, 'success');
+        closeModal('uploadModal');
         loadProducts();
-        
-    } catch (error) {
-        console.error('Error deleting products:', error);
-        showToast(error.message, 'error');
-    }
+        loadStats();
+    } catch (e) { showToast(e.message, 'error'); }
 }
 
-// Utility functions
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+// API Keys
+function showCreateKeyModal() { openModal('createKeyModal'); toggleKioskInput(); }
+function toggleKioskInput() {
+    const isKiosk = document.getElementById('keyIsKiosk').checked;
+    document.getElementById('kioskInventorySelect').style.display = isKiosk ? 'block' : 'none';
 }
 
-function truncate(text, length) {
-    return text.length > length ? text.substring(0, length) + '...' : text;
-}
-
-function formatDate(dateString) {
-    if (!dateString) return '-';
-    const date = new Date(dateString);
-    return date.toLocaleString();
-}
-
-function formatDateShort(dateString) {
-    if (!dateString) return '-';
-    const date = new Date(dateString);
-    return date.toLocaleDateString();
-}
-
-// Telegram Settings Functions
-async function loadTelegramSettings() {
+async function createApiKey() {
+    const key = val('keyValue');
+    const name = val('keyName');
+    const isKiosk = document.getElementById('keyIsKiosk').checked;
+    const invId = document.getElementById('keyInventory').value;
+    
     try {
-        const response = await fetch('/api/settings');
-        
-        if (response.status === 401) {
-            window.location.href = '/login';
-            return;
-        }
-        
-        const data = await response.json();
-        const settings = data.settings;
-        const checker = data.checker;
-        
-        // Populate form
-        document.getElementById('telegram_enabled').checked = settings.telegram_enabled || false;
-        document.getElementById('telegram_bot_token').value = settings.telegram_bot_token || '';
-        document.getElementById('telegram_chat_id').value = settings.telegram_chat_id || '';
-        document.getElementById('stock_threshold').value = settings.stock_threshold || 10;
-        document.getElementById('check_interval').value = settings.check_interval || '*/30 * * * *';
-        document.getElementById('notify_on_add').checked = settings.notify_on_add !== false;
-        document.getElementById('notify_on_sold').checked = settings.notify_on_sold !== false;
-        document.getElementById('telegram_header').value = settings.telegram_header || '';
-        document.getElementById('telegram_footer').value = settings.telegram_footer || '';
-        
-        // Show/hide config
-        toggleTelegramSettings();
-        
-        // Update status
-        updateCheckerStatus(checker);
-        
-    } catch (error) {
-        console.error('Error loading Telegram settings:', error);
-    }
+        await apiCall('/api/api-keys', 'POST', {
+            key, name, is_kiosk: isKiosk, inventory_id: isKiosk ? parseInt(invId) : null
+        });
+        closeModal('createKeyModal');
+        loadApiKeys();
+        showToast('Key created', 'success');
+    } catch (e) { showToast(e.message, 'error'); }
 }
 
+async function toggleKey(id, active) {
+    try {
+        await apiCall(`/api/api-keys/${id}/toggle`, 'PATCH', { is_active: active });
+        loadApiKeys();
+        showToast(`Key ${active ? 'activated' : 'deactivated'}`, 'success');
+    } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function deleteKey(id) {
+    if (!confirm('Delete API key?')) return;
+    try {
+        await apiCall(`/api/api-keys/${id}`, 'DELETE');
+        loadApiKeys();
+        showToast('Key deleted', 'success');
+    } catch (e) { showToast(e.message, 'error'); }
+}
+
+// Settings
 function toggleTelegramSettings() {
     const enabled = document.getElementById('telegram_enabled').checked;
-    const config = document.getElementById('telegramConfig');
-    config.style.display = enabled ? 'block' : 'none';
+    const form = document.getElementById('telegramConfig');
+    if (enabled) form.classList.remove('disabled');
+    else form.classList.add('disabled'); 
+    // CSS class logic or display none
+    form.style.opacity = enabled ? '1' : '0.5';
+    form.style.pointerEvents = enabled ? 'all' : 'none';
 }
 
 async function saveTelegramSettings() {
     const settings = {
         telegram_enabled: document.getElementById('telegram_enabled').checked,
-        telegram_bot_token: document.getElementById('telegram_bot_token').value.trim(),
-        telegram_chat_id: document.getElementById('telegram_chat_id').value.trim(),
-        stock_threshold: parseInt(document.getElementById('stock_threshold').value),
-        check_interval: document.getElementById('check_interval').value,
+        telegram_bot_token: val('telegram_bot_token'),
+        telegram_chat_id: val('telegram_chat_id'),
+        telegram_header: val('telegram_header'),
+        telegram_footer: val('telegram_footer'),
+        stock_threshold: parseInt(val('stock_threshold')),
+        check_interval: val('check_interval'),
         notify_on_add: document.getElementById('notify_on_add').checked,
-        notify_on_sold: document.getElementById('notify_on_sold').checked,
-        telegram_header: document.getElementById('telegram_header').value.trim(),
-        telegram_footer: document.getElementById('telegram_footer').value.trim()
+        notify_on_sold: document.getElementById('notify_on_sold').checked
     };
     
-    // Validate
-    if (settings.telegram_enabled) {
-        if (!settings.telegram_bot_token || !settings.telegram_chat_id) {
-            showToast('Please fill in Bot Token and Chat ID', 'error');
-            return;
-        }
-    }
-    
     try {
-        const response = await fetch('/api/settings', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(settings)
-        });
-        
-        if (response.status === 401) {
-            window.location.href = '/login';
-            return;
-        }
-        
-        const data = await response.json();
-        
-        if (!response.ok) {
-            throw new Error(data.error || 'Failed to save settings');
-        }
-        
-        showToast('Settings saved successfully!', 'success');
-        
-    } catch (error) {
-        console.error('Error saving settings:', error);
-        showToast(error.message, 'error');
-    }
-}
-
-async function testTelegram() {
-    const bot_token = document.getElementById('telegram_bot_token').value.trim();
-    const chat_id = document.getElementById('telegram_chat_id').value.trim();
-    const header = document.getElementById('telegram_header').value.trim();
-    const footer = document.getElementById('telegram_footer').value.trim();
-    
-    if (!bot_token || !chat_id) {
-        showToast('Please fill in Bot Token and Chat ID', 'error');
-        return;
-    }
-    
-    try {
-        const response = await fetch('/api/settings/telegram/test', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ bot_token, chat_id, header, footer })
-        });
-        
-        if (response.status === 401) {
-            window.location.href = '/login';
-            return;
-        }
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            showToast(`✓ Test successful! Check your Telegram group.`, 'success');
-        } else {
-            showToast(`✗ Test failed: ${data.error}`, 'error');
-        }
-        
-    } catch (error) {
-        console.error('Error testing Telegram:', error);
-        showToast('Failed to test Telegram', 'error');
-    }
+        await apiCall('/api/settings', 'POST', settings);
+        showToast('Settings saved', 'success');
+    } catch (e) { showToast(e.message, 'error'); }
 }
 
 async function checkStockNow() {
     try {
-        const response = await fetch('/api/settings/check-stock', {
-            method: 'POST'
-        });
-        
-        if (response.status === 401) {
-            window.location.href = '/login';
-            return;
-        }
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            showToast(`Stock check completed. Current: ${data.currentStock}${data.notificationSent ? ' (notification sent)' : ''}`, 'success');
-        } else {
-            showToast(`Check failed: ${data.error}`, 'error');
-        }
-        
-    } catch (error) {
-        console.error('Error checking stock:', error);
-        showToast('Failed to check stock', 'error');
-    }
+        const data = await apiCall('/api/settings/check-stock', 'POST');
+        showToast(`Stock check complete. Count: ${data.currentStock}`, 'success');
+    } catch (e) { showToast(e.message, 'error'); }
 }
 
 async function toggleChecker() {
-    const btn = document.getElementById('toggleCheckerBtn');
-    const isRunning = btn.textContent.includes('Stop');
+    const badge = document.getElementById('monitorStatusBadge');
+    const isRunning = badge.textContent === 'Running';
     const action = isRunning ? 'stop' : 'start';
     
     try {
-        const response = await fetch(`/api/settings/checker/${action}`, {
-            method: 'POST'
-        });
-        
-        if (response.status === 401) {
-            window.location.href = '/login';
-            return;
-        }
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            btn.textContent = isRunning ? '▶️ Start' : '⏸️ Stop';
-            showToast(data.message, 'success');
-            
-            // Reload settings to update status
-            setTimeout(loadTelegramSettings, 500);
-        }
-        
-    } catch (error) {
-        console.error('Error toggling checker:', error);
-        showToast('Failed to toggle checker', 'error');
-    }
-}
-
-// API Keys Management Functions
-async function loadApiKeys() {
-    try {
-        const response = await fetch('/api/api-keys');
-        
-        if (response.status === 401) {
-            window.location.href = '/login';
-            return;
-        }
-        
-        const data = await response.json();
-        const keys = data.keys;
-        const stats = data.stats;
-        
-        // Update stats
-        document.getElementById('totalKeys').textContent = stats.total || 0;
-        document.getElementById('activeKeys').textContent = stats.active || 0;
-        document.getElementById('totalRequests').textContent = stats.total_requests || 0;
-        
-        // Display keys
-        displayApiKeys(keys);
-        
-    } catch (error) {
-        console.error('Error loading API keys:', error);
-        showToast('Failed to load API keys', 'error');
-    }
-}
-
-function displayApiKeys(keys) {
-    const tbody = document.getElementById('apiKeysBody');
-    
-    if (keys.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="loading">No API keys found</td></tr>';
-        return;
-    }
-    
-    const html = keys.map(key => `
-        <tr>
-            <td><strong>${escapeHtml(key.name)}</strong>${key.description ? `<br><small>${escapeHtml(key.description)}</small>` : ''}</td>
-            <td>
-                <code class="key-display" onclick="copyToClipboard('${key.key}')" title="Click to copy">
-                    ${key.key.substring(0, 20)}...
-                </code>
-            </td>
-            <td>
-                <span class="badge ${key.is_active ? 'badge-success' : 'badge-warning'}">
-                    ${key.is_active ? 'Active' : 'Inactive'}
-                </span>
-            </td>
-            <td>${key.usage_count || 0} requests</td>
-            <td>${key.last_used ? formatDate(key.last_used) : 'Never'}</td>
-            <td>${formatDate(key.created_at)}<br><small>by ${escapeHtml(key.created_by)}</small></td>
-            <td>
-                <button onclick="toggleApiKey(${key.id}, ${!key.is_active})" class="btn btn-small ${key.is_active ? 'btn-secondary' : 'btn-primary'}" title="${key.is_active ? 'Deactivate' : 'Activate'}">
-                    ${key.is_active ? '⏸️' : '▶️'}
-                </button>
-                <button onclick="editApiKey(${key.id})" class="btn btn-secondary btn-small" title="Edit">✏️</button>
-                <button onclick="deleteApiKey(${key.id})" class="btn btn-danger btn-small" title="Delete">🗑️</button>
-            </td>
-        </tr>
-    `).join('');
-    
-    tbody.innerHTML = html;
-}
-
-function showCreateKeyModal() {
-    const modal = document.getElementById('createKeyModal');
-    modal.classList.add('show');
-    document.getElementById('keyValue').value = '';
-    document.getElementById('keyName').value = '';
-    document.getElementById('keyDescription').value = '';
-}
-
-function closeCreateKeyModal() {
-    const modal = document.getElementById('createKeyModal');
-    modal.classList.remove('show');
-}
-
-async function createApiKey() {
-    const key = document.getElementById('keyValue').value.trim();
-    const name = document.getElementById('keyName').value.trim();
-    const description = document.getElementById('keyDescription').value.trim();
-    
-    if (!key) {
-        showToast('Please enter an API key', 'error');
-        return;
-    }
-    
-    if (!name) {
-        showToast('Please enter a key name', 'error');
-        return;
-    }
-    
-    try {
-        const response = await fetch('/api/api-keys', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key, name, description })
-        });
-        
-        if (response.status === 401) {
-            window.location.href = '/login';
-            return;
-        }
-        
-        const data = await response.json();
-        
-        if (!response.ok) {
-            throw new Error(data.error || 'Failed to import API key');
-        }
-        
-        showToast('API key imported successfully!', 'success');
-        closeCreateKeyModal();
-        loadApiKeys();
-        
-    } catch (error) {
-        console.error('Error importing API key:', error);
-        showToast(error.message, 'error');
-    }
-}
-
-async function editApiKey(id) {
-    try {
-        const response = await fetch('/api/api-keys');
-        const data = await response.json();
-        const key = data.keys.find(k => k.id === id);
-        
-        if (!key) {
-            showToast('Key not found', 'error');
-            return;
-        }
-        
-        document.getElementById('editKeyId').value = key.id;
-        document.getElementById('editKeyName').value = key.name;
-        document.getElementById('editKeyDescription').value = key.description || '';
-        document.getElementById('editKeyActive').checked = key.is_active;
-        
-        const modal = document.getElementById('editKeyModal');
-        modal.classList.add('show');
-        
-    } catch (error) {
-        console.error('Error loading key for edit:', error);
-        showToast('Failed to load key details', 'error');
-    }
-}
-
-function closeEditKeyModal() {
-    const modal = document.getElementById('editKeyModal');
-    modal.classList.remove('show');
-}
-
-async function saveApiKey() {
-    const id = document.getElementById('editKeyId').value;
-    const name = document.getElementById('editKeyName').value.trim();
-    const description = document.getElementById('editKeyDescription').value.trim();
-    const is_active = document.getElementById('editKeyActive').checked;
-    
-    if (!name) {
-        showToast('Please enter a key name', 'error');
-        return;
-    }
-    
-    try {
-        const response = await fetch(`/api/api-keys/${id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, description, is_active })
-        });
-        
-        if (response.status === 401) {
-            window.location.href = '/login';
-            return;
-        }
-        
-        const data = await response.json();
-        
-        if (!response.ok) {
-            throw new Error(data.error || 'Failed to update API key');
-        }
-        
-        showToast('API key updated successfully!', 'success');
-        closeEditKeyModal();
-        loadApiKeys();
-        
-    } catch (error) {
-        console.error('Error updating API key:', error);
-        showToast(error.message, 'error');
-    }
-}
-
-async function toggleApiKey(id, activate) {
-    try {
-        const response = await fetch(`/api/api-keys/${id}/toggle`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ is_active: activate })
-        });
-        
-        if (response.status === 401) {
-            window.location.href = '/login';
-            return;
-        }
-        
-        const data = await response.json();
-        
-        if (!response.ok) {
-            throw new Error(data.error || 'Failed to toggle API key');
-        }
-        
+        const data = await apiCall(`/api/settings/checker/${action}`, 'POST');
         showToast(data.message, 'success');
-        loadApiKeys();
-        
-    } catch (error) {
-        console.error('Error toggling API key:', error);
-        showToast(error.message, 'error');
+        updateMonitorUI({ running: !isRunning }); // Optimistic update
+        loadSettings(); // Refresh real state
+    } catch (e) { showToast(e.message, 'error'); }
+}
+
+function updateMonitorUI(checker) {
+    const badge = document.getElementById('monitorStatusBadge');
+    const btn = document.getElementById('toggleCheckerBtn');
+    
+    if (checker && checker.running) {
+        badge.textContent = 'Running';
+        badge.className = 'status-badge success';
+        btn.textContent = 'Stop Monitor';
+        btn.className = 'btn btn-danger';
+    } else {
+        badge.textContent = 'Stopped';
+        badge.className = 'status-badge';
+        btn.textContent = 'Start Monitor';
+        btn.className = 'btn btn-primary';
     }
 }
 
-async function deleteApiKey(id) {
-    if (!confirm('Are you sure you want to delete this API key? This action cannot be undone.')) {
-        return;
+// --- Helpers ---
+
+function populateInventoryDropdowns() {
+    const options = state.inventories.map(i => `<option value="${i.id}">${escapeHtml(i.name)}</option>`).join('');
+    
+    const productFilter = document.getElementById('productInventoryFilter');
+    if (productFilter) productFilter.innerHTML = '<option value="">All Inventories</option>' + options;
+    
+    const uploadSelect = document.getElementById('uploadInventorySelect');
+    if (uploadSelect) uploadSelect.innerHTML = options;
+    
+    const keySelect = document.getElementById('keyInventory');
+    if (keySelect) keySelect.innerHTML = options;
+    
+    const editKeySelect = document.getElementById('editKeyInventory');
+    if (editKeySelect) editKeySelect.innerHTML = options;
+}
+
+async function apiCall(url, method = 'GET', body = null) {
+    const opts = { 
+        method, 
+        headers: { 'Content-Type': 'application/json' } 
+    };
+    if (body) opts.body = JSON.stringify(body);
+    
+    const res = await fetch(url, opts);
+    if (res.status === 401) {
+        window.location.href = '/login';
+        throw new Error('Unauthorized');
     }
+    
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'API Error');
+    return data;
+}
+
+// Modal System
+function openModal(id) {
+    const m = document.getElementById(id);
+    m.classList.add('open');
+    setTimeout(() => m.querySelector('.input')?.focus(), 100);
+}
+function closeModal(id) {
+    document.getElementById(id).classList.remove('open');
+}
+window.onclick = (e) => {
+    if (e.target.classList.contains('modal')) e.target.classList.remove('open');
+};
+
+// Utilities
+function val(id) { return document.getElementById(id)?.value.trim(); }
+function setVal(id, v) { const el = document.getElementById(id); if(el) el.value = v || ''; }
+function setCheck(id, v) { const el = document.getElementById(id); if(el) el.checked = v; }
+function updateElement(id, v) { const el = document.getElementById(id); if(el) el.textContent = v; }
+function showToast(msg, type='info') {
+    const container = document.getElementById('toast-container');
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.textContent = msg;
+    container.appendChild(toast);
+    setTimeout(() => toast.remove(), 3000);
+}
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+function logout() {
+    fetch('/api/logout', { method: 'POST' }).then(() => window.location.href = '/login');
+}
+function copyToClipboard(text) {
+    navigator.clipboard.writeText(text);
+    showToast('Copied to clipboard', 'success');
+}
+
+// Delete By Date Logic
+let productsToDeleteByDate = [];
+
+function showDeleteByDateModal() { 
+    openModal('deleteByDateModal'); 
+    // Set default to 7 days ago
+    const d = new Date();
+    d.setDate(d.getDate() - 7);
+    document.getElementById('deleteBeforeDate').value = d.toISOString().split('T')[0];
+    document.getElementById('deletePreview').innerHTML = '';
+    document.getElementById('confirmDeleteDateBtn').style.display = 'none';
+    productsToDeleteByDate = [];
+}
+
+async function previewDeleteByDate() {
+    const dateVal = val('deleteBeforeDate');
+    if(!dateVal) return showToast('Select date', 'error');
     
     try {
-        const response = await fetch(`/api/api-keys/${id}`, {
-            method: 'DELETE'
+        document.getElementById('deletePreview').innerHTML = '<div class="loading">Scanning products...</div>';
+        
+        // 1. Get all available products (from all inventories or current context? 
+        // Let's stick to ALL available products to be safe, or clarify context. 
+        // The original implementation deleted "unsold" products globally based on date.
+        // We'll assume global cleanup.)
+        
+        const res = await fetch('/api/products?status=available');
+        if(res.status === 401) return window.location.href = '/login';
+        const data = await res.json();
+        
+        const targetDate = new Date(dateVal + 'T23:59:59').getTime();
+        
+        productsToDeleteByDate = data.products.filter(p => {
+            const uploadTime = new Date(p.upload_date).getTime();
+            return uploadTime <= targetDate;
         });
         
-        if (response.status === 401) {
-            window.location.href = '/login';
-            return;
+        const count = productsToDeleteByDate.length;
+        let html = '';
+        
+        if (count === 0) {
+            html = `<div class="empty-state" style="color:var(--success)">No old products found before this date.</div>`;
+            document.getElementById('confirmDeleteDateBtn').style.display = 'none';
+        } else {
+            html = `<div style="margin-bottom:10px; font-weight:600; color:var(--danger)">
+                Found ${count} unsold products to delete:
+            </div>
+            <ul style="max-height:150px; overflow-y:auto; padding-left:20px; color:var(--text-secondary); font-size:0.9rem;">
+                ${productsToDeleteByDate.slice(0, 10).map(p => `<li>${escapeHtml(p.product)} <small>(${new Date(p.upload_date).toLocaleDateString()})</small></li>`).join('')}
+                ${count > 10 ? `<li>...and ${count - 10} more</li>` : ''}
+            </ul>`;
+            document.getElementById('confirmDeleteDateBtn').style.display = 'inline-block';
         }
         
-        const data = await response.json();
+        document.getElementById('deletePreview').innerHTML = html;
         
-        if (!response.ok) {
-            throw new Error(data.error || 'Failed to delete API key');
-        }
-        
-        showToast('API key deleted successfully!', 'success');
-        loadApiKeys();
-        
-    } catch (error) {
-        console.error('Error deleting API key:', error);
-        showToast(error.message, 'error');
+    } catch (e) {
+        showToast('Failed to preview: ' + e.message, 'error');
     }
 }
 
-function copyToClipboard(text) {
-    const textarea = document.createElement('textarea');
-    textarea.value = text;
-    textarea.style.position = 'fixed';
-    textarea.style.opacity = '0';
-    document.body.appendChild(textarea);
-    textarea.select();
-    document.execCommand('copy');
-    document.body.removeChild(textarea);
-    showToast('API key copied to clipboard!', 'success');
+async function confirmDeleteByDate() {
+    const count = productsToDeleteByDate.length;
+    if (count === 0) return;
+    
+    if (!confirm(`Permanently delete ${count} products?`)) return;
+    
+    try {
+        const ids = productsToDeleteByDate.map(p => p.id);
+        await apiCall('/api/products/bulk-delete', 'POST', { ids });
+        
+        showToast(`Deleted ${count} products`, 'success');
+        closeModal('deleteByDateModal');
+        
+        // Refresh
+        loadStats();
+        loadProducts(); 
+        if(state.activeTab === 'inventory') loadInventories();
+        
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
 }
-
-function updateCheckerStatus(checker) {
-    const statusBox = document.getElementById('checkerStatus');
-    const statusContent = document.getElementById('statusContent');
-    const toggleBtn = document.getElementById('toggleCheckerBtn');
-    
-    if (!checker) return;
-    
-    statusBox.style.display = 'block';
-    
-    const runningClass = checker.running ? 'success' : 'error';
-    const runningText = checker.running ? '✓ Running' : '✗ Stopped';
-    const lastCheckText = checker.lastCheck ? new Date(checker.lastCheck).toLocaleString() : 'Never';
-    
-    statusContent.innerHTML = `
-        <div class="status-item">
-            <span class="status-label">Status:</span>
-            <span class="status-value ${runningClass}">${runningText}</span>
-        </div>
-        <div class="status-item">
-            <span class="status-label">Last Check:</span>
-            <span class="status-value">${lastCheckText}</span>
-        </div>
-        ${checker.lastNotificationCount !== null ? `
-        <div class="status-item">
-            <span class="status-label">Last Notification:</span>
-            <span class="status-value">${checker.lastNotificationCount} products</span>
-        </div>
-        ` : ''}
-    `;
-    
-    toggleBtn.textContent = checker.running ? '⏸️ Stop' : '▶️ Start';
-}
-

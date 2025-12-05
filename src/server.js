@@ -16,6 +16,7 @@ const apiRoutes = require('./routes/api');
 const dashboardRoutes = require('./routes/dashboard');
 const settingsRoutes = require('./routes/settings');
 const apiKeysRoutes = require('./routes/apiKeys');
+const inventoriesRoutes = require('./routes/inventories');
 const { handleLogin, handleLogout, validateDashboardAuth } = require('./middleware/auth');
 const telegramService = require('./services/telegram');
 const stockChecker = require('./services/stockChecker');
@@ -108,6 +109,7 @@ app.use('/', apiRoutes);
 app.use('/api', validateDashboardAuth, dashboardRoutes);
 app.use('/api', validateDashboardAuth, settingsRoutes);
 app.use('/api', validateDashboardAuth, apiKeysRoutes);
+app.use('/api', validateDashboardAuth, inventoriesRoutes);
 
 // Dashboard page - require authentication
 app.get(['/', '/dashboard'], validateDashboardAuth, (req, res) => {

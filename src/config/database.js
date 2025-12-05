@@ -38,14 +38,28 @@ const dbAll = promisify(db.all.bind(db));
 
 // Initialize database schema
 async function initializeDatabase() {
+    // Create inventories table
+    const createInventoriesTableSQL = `
+        CREATE TABLE IF NOT EXISTS inventories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            is_active BOOLEAN DEFAULT 1
+        )
+    `;
+
+    // Create products table with inventory_id
     const createTableSQL = `
         CREATE TABLE IF NOT EXISTS products (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             product TEXT NOT NULL,
+            inventory_id INTEGER DEFAULT 1,
             upload_date DATETIME DEFAULT CURRENT_TIMESTAMP,
             is_sold BOOLEAN DEFAULT 0,
             order_id TEXT NULL,
-            sold_date DATETIME NULL
+            sold_date DATETIME NULL,
+            FOREIGN KEY (inventory_id) REFERENCES inventories(id)
         )
     `;
 
@@ -57,10 +71,44 @@ async function initializeDatabase() {
         CREATE INDEX IF NOT EXISTS idx_upload_date ON products(upload_date)
     `;
 
+    const createIndexInventorySQL = `
+        CREATE INDEX IF NOT EXISTS idx_inventory_id ON products(inventory_id)
+    `;
+
+    const createIndexInventorySoldSQL = `
+        CREATE INDEX IF NOT EXISTS idx_inventory_sold ON products(inventory_id, is_sold)
+    `;
+
     try {
+        // Create inventories table first
+        await dbRun(createInventoriesTableSQL);
+        
+        // Check if default inventory exists
+        const defaultInventory = await dbGet('SELECT id FROM inventories WHERE id = 1');
+        if (!defaultInventory) {
+            await dbRun(
+                'INSERT INTO inventories (id, name, description) VALUES (?, ?, ?)',
+                [1, 'Default Inventory', 'Main inventory for all products']
+            );
+            console.log('✓ Default inventory created');
+        }
+
+        // Create or alter products table
         await dbRun(createTableSQL);
+        
+        // Try to add inventory_id column if it doesn't exist (for existing databases)
+        try {
+            await dbRun('ALTER TABLE products ADD COLUMN inventory_id INTEGER DEFAULT 1');
+            console.log('✓ Added inventory_id column to products table');
+        } catch (e) {
+            // Column already exists, ignore
+        }
+        
         await dbRun(createIndexSoldSQL);
         await dbRun(createIndexUploadDateSQL);
+        await dbRun(createIndexInventorySQL);
+        await dbRun(createIndexInventorySoldSQL);
+        
         console.log('✓ Database initialized successfully');
     } catch (error) {
         console.error('✗ Error initializing database:', error.message);
@@ -73,11 +121,22 @@ initializeDatabase().catch(console.error);
 
 // Database query functions (replacing prepared statements)
 const queries = {
-    async getAvailableCount() {
+    async getAvailableCount(inventoryId = null) {
+        if (inventoryId) {
+            return await dbGet('SELECT COUNT(*) as sum FROM products WHERE is_sold = 0 AND inventory_id = ?', [inventoryId]);
+        }
         return await dbGet('SELECT COUNT(*) as sum FROM products WHERE is_sold = 0');
     },
     
-    async getAvailableProducts(limit) {
+    async getAvailableProducts(limit, inventoryId = null) {
+        if (inventoryId) {
+            return await dbAll(`
+                SELECT id, product FROM products 
+                WHERE is_sold = 0 AND inventory_id = ?
+                ORDER BY id ASC 
+                LIMIT ?
+            `, [inventoryId, limit]);
+        }
         return await dbAll(`
             SELECT id, product FROM products 
             WHERE is_sold = 0 
@@ -94,21 +153,37 @@ const queries = {
         `, [orderId, productId]);
     },
     
-    async insertProduct(product) {
-        return await dbRun('INSERT INTO products (product) VALUES (?)', [product]);
+    async insertProduct(product, inventoryId = 1) {
+        return await dbRun('INSERT INTO products (product, inventory_id) VALUES (?, ?)', [product, inventoryId]);
     },
     
-    async getAllProducts() {
+    async getAllProducts(inventoryId = null) {
+        if (inventoryId) {
+            return await dbAll(`
+                SELECT id, product, inventory_id, upload_date, is_sold, order_id, sold_date 
+                FROM products 
+                WHERE inventory_id = ?
+                ORDER BY upload_date DESC, id DESC
+            `, [inventoryId]);
+        }
         return await dbAll(`
-            SELECT id, product, upload_date, is_sold, order_id, sold_date 
+            SELECT id, product, inventory_id, upload_date, is_sold, order_id, sold_date 
             FROM products 
             ORDER BY upload_date DESC, id DESC
         `);
     },
     
-    async getProductsByStatus(status) {
+    async getProductsByStatus(status, inventoryId = null) {
+        if (inventoryId) {
+            return await dbAll(`
+                SELECT id, product, inventory_id, upload_date, is_sold, order_id, sold_date 
+                FROM products 
+                WHERE is_sold = ? AND inventory_id = ?
+                ORDER BY upload_date DESC, id DESC
+            `, [status, inventoryId]);
+        }
         return await dbAll(`
-            SELECT id, product, upload_date, is_sold, order_id, sold_date 
+            SELECT id, product, inventory_id, upload_date, is_sold, order_id, sold_date 
             FROM products 
             WHERE is_sold = ? 
             ORDER BY upload_date DESC, id DESC
@@ -119,7 +194,17 @@ const queries = {
         return await dbRun('DELETE FROM products WHERE id = ?', [id]);
     },
     
-    async getStats() {
+    async getStats(inventoryId = null) {
+        if (inventoryId) {
+            return await dbGet(`
+                SELECT 
+                    COUNT(*) as total,
+                    SUM(CASE WHEN is_sold = 0 THEN 1 ELSE 0 END) as available,
+                    SUM(CASE WHEN is_sold = 1 THEN 1 ELSE 0 END) as sold
+                FROM products
+                WHERE inventory_id = ?
+            `, [inventoryId]);
+        }
         return await dbGet(`
             SELECT 
                 COUNT(*) as total,
@@ -129,23 +214,72 @@ const queries = {
         `);
     },
     
-    async getRecentUploads() {
+    async getRecentUploads(inventoryId = null) {
+        if (inventoryId) {
+            return await dbAll(`
+                SELECT product, upload_date, inventory_id
+                FROM products 
+                WHERE inventory_id = ?
+                ORDER BY upload_date DESC 
+                LIMIT 10
+            `, [inventoryId]);
+        }
         return await dbAll(`
-            SELECT product, upload_date 
+            SELECT product, upload_date, inventory_id
             FROM products 
             ORDER BY upload_date DESC 
             LIMIT 10
         `);
     },
     
-    async getRecentSales() {
+    async getRecentSales(inventoryId = null) {
+        if (inventoryId) {
+            return await dbAll(`
+                SELECT product, order_id, sold_date, inventory_id
+                FROM products 
+                WHERE is_sold = 1 AND inventory_id = ?
+                ORDER BY sold_date DESC 
+                LIMIT 10
+            `, [inventoryId]);
+        }
         return await dbAll(`
-            SELECT product, order_id, sold_date 
+            SELECT product, order_id, sold_date, inventory_id
             FROM products 
             WHERE is_sold = 1 
             ORDER BY sold_date DESC 
             LIMIT 10
         `);
+    },
+
+    // Inventory queries
+    async getAllInventories() {
+        return await dbAll(`
+            SELECT id, name, description, created_at, is_active
+            FROM inventories
+            ORDER BY created_at DESC
+        `);
+    },
+
+    async getInventoryById(id) {
+        return await dbGet('SELECT * FROM inventories WHERE id = ?', [id]);
+    },
+
+    async createInventory(name, description) {
+        return await dbRun(
+            'INSERT INTO inventories (name, description) VALUES (?, ?)',
+            [name, description]
+        );
+    },
+
+    async updateInventory(id, name, description, isActive) {
+        return await dbRun(
+            'UPDATE inventories SET name = ?, description = ?, is_active = ? WHERE id = ?',
+            [name, description, isActive ? 1 : 0, id]
+        );
+    },
+
+    async deleteInventory(id) {
+        return await dbRun('DELETE FROM inventories WHERE id = ?', [id]);
     }
 };
 

@@ -17,7 +17,9 @@ async function validateApiKey(req, res, next) {
     // Attach key info to request for potential logging
     req.apiKey = {
         id: validation.keyId,
-        name: validation.keyName
+        name: validation.keyName,
+        inventoryId: validation.inventoryId,
+        isKiosk: validation.isKiosk
     };
 
     next();

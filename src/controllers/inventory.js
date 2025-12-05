@@ -6,18 +6,22 @@ const activityMonitor = require('../services/activityMonitor');
 // Get total inventory count (available products)
 async function getInventoryCount(req, res) {
     try {
-        // Check cache first
-        const cached = cache.get('inventory_count');
+        // Get inventory ID from API key if kiosk mode
+        const inventoryId = req.apiKey?.isKiosk ? req.apiKey.inventoryId : null;
+        
+        // Check cache first (with inventory-specific key for kiosk)
+        const cacheKey = inventoryId ? `inventory_count_${inventoryId}` : 'inventory_count';
+        const cached = cache.get(cacheKey);
         if (cached !== null) {
             return res.json({ sum: cached });
         }
 
-        // Query database
-        const result = await queries.getAvailableCount();
+        // Query database with inventory filter if kiosk mode
+        const result = await queries.getAvailableCount(inventoryId);
         const count = result ? result.sum : 0;
 
         // Cache the result
-        cache.set('inventory_count', count);
+        cache.set(cacheKey, count);
 
         res.json({ sum: count });
     } catch (error) {
@@ -45,11 +49,14 @@ async function getProducts(req, res) {
     const orderId = orderValidation.value;
     const qty = quantityValidation.value;
 
+    // Get inventory ID from API key if kiosk mode
+    const inventoryId = req.apiKey?.isKiosk ? req.apiKey.inventoryId : null;
+
     try {
         // Run transaction
         const result = await runInTransaction(async () => {
-            // Get available products
-            const products = await queries.getAvailableProducts(qty);
+            // Get available products with inventory filter if kiosk mode
+            const products = await queries.getAvailableProducts(qty, inventoryId);
 
             if (products.length === 0) {
                 throw new Error('NO_PRODUCTS_AVAILABLE');
@@ -68,8 +75,11 @@ async function getProducts(req, res) {
             return products.map(p => ({ product: p.product }));
         });
 
-        // Invalidate cache
+        // Invalidate cache (both general and inventory-specific)
         cache.invalidate('inventory_count');
+        if (inventoryId) {
+            cache.invalidate(`inventory_count_${inventoryId}`);
+        }
 
         // Send notification about sale
         activityMonitor.notifyProductSold(qty, orderId);

@@ -14,11 +14,14 @@ class ApiKeyService {
                     key TEXT UNIQUE NOT NULL,
                     name TEXT NOT NULL,
                     description TEXT,
+                    inventory_id INTEGER DEFAULT NULL,
+                    is_kiosk BOOLEAN DEFAULT 0,
                     is_active BOOLEAN DEFAULT 1,
                     usage_count INTEGER DEFAULT 0,
                     last_used DATETIME,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    created_by TEXT DEFAULT 'admin'
+                    created_by TEXT DEFAULT 'admin',
+                    FOREIGN KEY (inventory_id) REFERENCES inventories(id)
                 )
             `);
 
@@ -26,14 +29,33 @@ class ApiKeyService {
                 CREATE INDEX IF NOT EXISTS idx_api_key ON api_keys(key, is_active)
             `);
 
+            await dbRun(`
+                CREATE INDEX IF NOT EXISTS idx_inventory_id ON api_keys(inventory_id)
+            `);
+
+            // Try to add inventory_id and is_kiosk columns if they don't exist (for existing databases)
+            try {
+                await dbRun('ALTER TABLE api_keys ADD COLUMN inventory_id INTEGER DEFAULT NULL');
+                console.log('✓ Added inventory_id column to api_keys table');
+            } catch (e) {
+                // Column already exists, ignore
+            }
+
+            try {
+                await dbRun('ALTER TABLE api_keys ADD COLUMN is_kiosk BOOLEAN DEFAULT 0');
+                console.log('✓ Added is_kiosk column to api_keys table');
+            } catch (e) {
+                // Column already exists, ignore
+            }
+
             // Check if default key exists
             const defaultKey = process.env.API_KEY || '17e7068f-f366-4120-83e3-e0ec1212da49';
             const existing = await dbGet('SELECT id FROM api_keys WHERE key = ?', [defaultKey]);
             
             if (!existing) {
                 await dbRun(
-                    'INSERT INTO api_keys (key, name, description, is_active) VALUES (?, ?, ?, ?)',
-                    [defaultKey, 'Default Key', 'Initial API key from environment', 1]
+                    'INSERT INTO api_keys (key, name, description, is_active, is_kiosk) VALUES (?, ?, ?, ?, ?)',
+                    [defaultKey, 'Default Key', 'Initial API key from environment - Full Access', 1, 0]
                 );
                 console.log('✓ Default API key added');
             }
@@ -44,7 +66,7 @@ class ApiKeyService {
         }
     }
 
-    async createKey(key, name, description = '', createdBy = 'admin') {
+    async createKey(key, name, description = '', createdBy = 'admin', inventoryId = null, isKiosk = false) {
         try {
             // Validate key
             if (!key || key.trim().length === 0) {
@@ -64,10 +86,18 @@ class ApiKeyService {
                     error: 'This API key already exists'
                 };
             }
+
+            // If kiosk mode, inventory_id is required
+            if (isKiosk && !inventoryId) {
+                return {
+                    success: false,
+                    error: 'Inventory ID is required for kiosk API keys'
+                };
+            }
             
             const result = await dbRun(
-                'INSERT INTO api_keys (key, name, description, created_by) VALUES (?, ?, ?, ?)',
-                [trimmedKey, name, description, createdBy]
+                'INSERT INTO api_keys (key, name, description, created_by, inventory_id, is_kiosk) VALUES (?, ?, ?, ?, ?, ?)',
+                [trimmedKey, name, description, createdBy, inventoryId, isKiosk ? 1 : 0]
             );
 
             return {
@@ -87,7 +117,7 @@ class ApiKeyService {
     async validateKey(key) {
         try {
             const apiKey = await dbGet(
-                'SELECT id, name, is_active FROM api_keys WHERE key = ? AND is_active = 1',
+                'SELECT id, name, is_active, inventory_id, is_kiosk FROM api_keys WHERE key = ? AND is_active = 1',
                 [key]
             );
 
@@ -101,7 +131,9 @@ class ApiKeyService {
                 return {
                     valid: true,
                     keyId: apiKey.id,
-                    keyName: apiKey.name
+                    keyName: apiKey.name,
+                    inventoryId: apiKey.inventory_id,
+                    isKiosk: apiKey.is_kiosk === 1
                 };
             }
 
@@ -116,17 +148,21 @@ class ApiKeyService {
         try {
             const keys = await dbAll(`
                 SELECT 
-                    id, 
-                    key, 
-                    name, 
-                    description, 
-                    is_active, 
-                    usage_count, 
-                    last_used, 
-                    created_at, 
-                    created_by
-                FROM api_keys
-                ORDER BY created_at DESC
+                    ak.id, 
+                    ak.key, 
+                    ak.name, 
+                    ak.description, 
+                    ak.is_active,
+                    ak.is_kiosk,
+                    ak.inventory_id,
+                    i.name as inventory_name,
+                    ak.usage_count, 
+                    ak.last_used, 
+                    ak.created_at, 
+                    ak.created_by
+                FROM api_keys ak
+                LEFT JOIN inventories i ON ak.inventory_id = i.id
+                ORDER BY ak.created_at DESC
             `);
 
             return keys;
@@ -147,11 +183,19 @@ class ApiKeyService {
 
     async updateKey(id, updates) {
         try {
-            const { name, description, is_active } = updates;
+            const { name, description, is_active, inventory_id, is_kiosk } = updates;
             
+            // If kiosk mode, inventory_id is required
+            if (is_kiosk && !inventory_id) {
+                return {
+                    success: false,
+                    error: 'Inventory ID is required for kiosk API keys'
+                };
+            }
+
             await dbRun(
-                'UPDATE api_keys SET name = ?, description = ?, is_active = ? WHERE id = ?',
-                [name, description, is_active ? 1 : 0, id]
+                'UPDATE api_keys SET name = ?, description = ?, is_active = ?, inventory_id = ?, is_kiosk = ? WHERE id = ?',
+                [name, description, is_active ? 1 : 0, inventory_id, is_kiosk ? 1 : 0, id]
             );
 
             return { success: true };

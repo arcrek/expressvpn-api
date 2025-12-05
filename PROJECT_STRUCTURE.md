@@ -15,6 +15,7 @@ expressvpn-api/
 ├── 📚 Documentation
 │   ├── README.md                 # Full project documentation
 │   ├── PROJECT_STRUCTURE.md      # This file
+│   ├── KIOSK_GUIDE.md            # Kiosk mode and inventory management guide
 │   └── api.md                    # Original API specification
 │
 ├── 🗄️ Database
@@ -44,14 +45,16 @@ expressvpn-api/
 │       │   ├── api.js            # Main API endpoints
 │       │   ├── dashboard.js      # Dashboard API endpoints
 │       │   ├── settings.js       # Settings API endpoints
-│       │   └── apiKeys.js        # API key management endpoints
+│       │   ├── apiKeys.js        # API key management endpoints
+│       │   └── inventories.js    # Inventory management endpoints (NEW!)
 │       │
 │       ├── 📁 services/          # Business services
 │       │   ├── telegram.js       # Telegram bot integration
 │       │   ├── stockChecker.js   # Periodic stock monitoring
 │       │   ├── activityMonitor.js # Real-time activity notifications
 │       │   ├── settings.js       # Settings management
-│       │   └── apiKeys.js        # API key service
+│       │   ├── apiKeys.js        # API key service
+│       │   └── inventoryService.js # Inventory management service (NEW!)
 │       │
 │       └── server.js             # Main application entry point
 │
@@ -89,6 +92,7 @@ expressvpn-api/
 - Get products and mark as sold (transactional)
 - Triggers instant notification when products are sold
 - Main API logic as per api.md specification
+- Inventory filtering for kiosk mode (NEW!)
 
 #### `src/controllers/products.js`
 - Upload products from text (triggers instant notification)
@@ -96,12 +100,15 @@ expressvpn-api/
 - Delete single/multiple products
 - Delete unsold products by upload date
 - Get statistics
+- Inventory-specific uploads (NEW!)
+- Inventory filtering (NEW!)
 
 #### `src/middleware/auth.js`
 - Multiple API key validation for API endpoints (from database)
 - Session-based authentication for dashboard
 - Request type detection (API vs Dashboard)
 - Security middleware
+- Inventory context attachment (NEW!)
 
 #### `src/routes/api.js`
 - `/input` endpoint for inventory operations
@@ -122,6 +129,13 @@ expressvpn-api/
 - Import custom API keys
 - Activate/deactivate keys
 - Usage tracking
+- Kiosk mode support (NEW!)
+
+#### `src/routes/inventories.js` (NEW!)
+- Inventory CRUD operations
+- Create separate product pools
+- Inventory statistics
+- Inventory management
 
 #### `src/services/telegram.js`
 - Telegram bot message sending
@@ -150,6 +164,14 @@ expressvpn-api/
 - Key usage tracking
 - Multiple active key support
 - Last used timestamp tracking
+- Inventory association (NEW!)
+- Kiosk mode validation (NEW!)
+
+#### `src/services/inventoryService.js` (NEW!)
+- Inventory CRUD operations
+- Inventory statistics
+- Validation and constraints
+- Integration with products and API keys
 
 ### Frontend Files
 
@@ -252,7 +274,9 @@ expressvpn-api/
 ### API Request Flow
 ```
 Client → server.js → middleware/auth.js (validates API key from database)
+  → (attaches inventory context if kiosk mode)
   → routes/api.js → controllers/inventory.js 
+  → (filters by inventory if kiosk)
   → config/database.js → SQLite
   → (if sold) activityMonitor.notifyProductSold → telegram.js
 ```

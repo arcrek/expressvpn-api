@@ -15,6 +15,8 @@ A lightweight, ultra-fast product inventory management system with RESTful API a
 - **Telegram Notifications**: Real-time stock alerts and activity notifications
 - **Smart Monitoring**: Periodic stock checks with customizable thresholds
 - **Date-Based Management**: Delete unsold products by upload date
+- **🏪 Kiosk Mode**: Create separate inventories with isolated API key access (NEW!)
+- **Multiple Inventories**: Manage different product pools independently (NEW!)
 
 ## 🚀 Quick Start
 
@@ -203,6 +205,8 @@ Access the dashboard at `http://localhost:3000` with Basic Authentication.
 - **🗑️ Bulk Delete**: Select and delete multiple products
 - **📅 Date-Based Deletion**: Delete unsold products by upload date
 - **🔑 API Key Management**: Create, import, activate/deactivate multiple API keys
+- **🏪 Inventory Management**: Create and manage separate inventories (NEW!)
+- **🔒 Kiosk API Keys**: Restrict API keys to specific inventories (NEW!)
 - **📱 Telegram Integration**: Configure bot notifications with custom headers/footers
 - **⚡ Real-time Notifications**: Instant alerts when products are added or sold
 - **📉 Stock Monitoring**: Periodic checks for low stock and out-of-stock alerts (UTC+7 timezone)
@@ -284,32 +288,49 @@ expressvpn-api/
 ## 🗄️ Database Schema
 
 ```sql
--- Products table
+-- Inventories table (NEW!)
+CREATE TABLE inventories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    is_active BOOLEAN DEFAULT 1
+);
+
+-- Products table (Updated with inventory_id)
 CREATE TABLE products (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     product TEXT NOT NULL,
+    inventory_id INTEGER DEFAULT 1,
     upload_date DATETIME DEFAULT CURRENT_TIMESTAMP,
     is_sold BOOLEAN DEFAULT 0,
     order_id TEXT NULL,
-    sold_date DATETIME NULL
+    sold_date DATETIME NULL,
+    FOREIGN KEY (inventory_id) REFERENCES inventories(id)
 );
 
 CREATE INDEX idx_is_sold ON products(is_sold);
 CREATE INDEX idx_upload_date ON products(upload_date);
+CREATE INDEX idx_inventory_id ON products(inventory_id);
+CREATE INDEX idx_inventory_sold ON products(inventory_id, is_sold);
 
--- API keys table
+-- API keys table (Updated with kiosk support)
 CREATE TABLE api_keys (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     key TEXT UNIQUE NOT NULL,
     name TEXT,
+    inventory_id INTEGER DEFAULT NULL,
+    is_kiosk BOOLEAN DEFAULT 0,
     is_active BOOLEAN DEFAULT 1,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     last_used_at DATETIME,
-    usage_count INTEGER DEFAULT 0
+    usage_count INTEGER DEFAULT 0,
+    FOREIGN KEY (inventory_id) REFERENCES inventories(id)
 );
 
 CREATE INDEX idx_api_key ON api_keys(key);
 CREATE INDEX idx_is_active ON api_keys(is_active);
+CREATE INDEX idx_inventory_id ON api_keys(inventory_id);
 
 -- Settings table
 CREATE TABLE settings (
@@ -324,6 +345,11 @@ CREATE TABLE sessions (
     sess TEXT NOT NULL
 );
 ```
+
+**Note**: Database migration is automatic. When you upgrade, the system will:
+- Create the `inventories` table
+- Add `inventory_id` column to `products` (existing products → inventory 1)
+- Add `inventory_id` and `is_kiosk` columns to `api_keys` (existing keys → full access)
 
 ## 🐳 Docker Commands
 
@@ -467,6 +493,7 @@ API keys are managed through the dashboard instead of environment variables.
 - **Usage Tracking**: Track last used time and usage count for each key
 - **Activate/Deactivate**: Enable or disable keys without deletion
 - **Dashboard UI**: Manage all keys from the dashboard
+- **🏪 Kiosk Mode**: Restrict API keys to specific inventories (NEW!)
 
 ### Using API Keys
 
@@ -474,6 +501,7 @@ API keys are managed through the dashboard instead of environment variables.
    - Go to API Keys section in dashboard
    - Click "Import API Key"
    - Enter your key and optional name
+   - (Optional) Enable "Kiosk Mode" and select an inventory
    - Click Import
 
 2. **Use in API Calls**:
@@ -484,6 +512,68 @@ API keys are managed through the dashboard instead of environment variables.
 3. **Monitor Usage**:
    - View usage count and last used time in dashboard
    - Deactivate compromised keys instantly
+
+## 🏪 Kiosk Mode & Multiple Inventories
+
+**NEW FEATURE**: Create separate inventories and associate API keys with specific inventories for complete isolation.
+
+### What is Kiosk Mode?
+
+Kiosk mode allows you to:
+- Create multiple separate inventories
+- Assign each API key to a specific inventory
+- Ensure complete isolation between different product pools
+- Perfect for managing multiple resellers or product lines
+
+### Use Cases
+
+1. **Multiple Resellers**: Each reseller gets their own inventory and kiosk API key
+2. **Different Product Lines**: Separate inventories for different VPN products
+3. **Regional Separation**: Different inventories for different regions
+4. **Testing**: Separate test inventory from production
+
+### Quick Setup
+
+1. **Create an Inventory** (via dashboard or API):
+   ```bash
+   curl -X POST http://localhost:3000/api/inventories \
+     -H "Content-Type: application/json" \
+     -d '{"name":"Reseller A","description":"Products for Reseller A"}'
+   ```
+
+2. **Create a Kiosk API Key**:
+   ```bash
+   curl -X POST http://localhost:3000/api/api-keys \
+     -H "Content-Type: application/json" \
+     -d '{
+       "key":"reseller-a-key-123",
+       "name":"Reseller A Key",
+       "is_kiosk":true,
+       "inventory_id":2
+     }'
+   ```
+
+3. **Upload Products to Specific Inventory**:
+   ```bash
+   curl -X POST http://localhost:3000/api/products \
+     -H "Content-Type: application/json" \
+     -d '{"products":"product1\nproduct2","inventory_id":2}'
+   ```
+
+4. **Use Kiosk API Key** (automatically filtered to assigned inventory):
+   ```bash
+   curl "http://localhost:3000/input?key=reseller-a-key-123"
+   # Only returns products from inventory 2
+   ```
+
+### Key Benefits
+
+- ✅ **Complete Isolation**: Kiosk keys can only see their assigned inventory
+- ✅ **Easy Management**: Manage multiple inventories from one dashboard
+- ✅ **Backward Compatible**: Existing API keys continue to work as before
+- ✅ **Flexible**: Mix kiosk and full-access keys as needed
+
+📚 **For detailed documentation, see [KIOSK_GUIDE.md](KIOSK_GUIDE.md)**
 
 ## 🐛 Troubleshooting
 

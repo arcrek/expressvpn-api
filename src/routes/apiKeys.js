@@ -21,7 +21,7 @@ router.get('/api-keys', async (req, res) => {
 // Create new API key
 router.post('/api-keys', express.json(), async (req, res) => {
     try {
-        const { key, name, description } = req.body;
+        const { key, name, description, inventory_id, is_kiosk } = req.body;
 
         if (!key || key.trim().length === 0) {
             return res.status(400).json({ error: 'API key is required' });
@@ -31,12 +31,18 @@ router.post('/api-keys', express.json(), async (req, res) => {
             return res.status(400).json({ error: 'Name is required' });
         }
 
+        if (is_kiosk && !inventory_id) {
+            return res.status(400).json({ error: 'Inventory is required for kiosk API keys' });
+        }
+
         const username = req.session?.username || 'admin';
         const result = await apiKeyService.createKey(
             key.trim(),
             name.trim(), 
             description?.trim() || '', 
-            username
+            username,
+            inventory_id ? parseInt(inventory_id) : null,
+            is_kiosk || false
         );
 
         if (!result.success) {

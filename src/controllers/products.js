@@ -5,7 +5,7 @@ const activityMonitor = require('../services/activityMonitor');
 
 // Upload products from text
 async function uploadProducts(req, res) {
-    const { products } = req.body;
+    const { products, inventory_id } = req.body;
 
     if (!products) {
         return res.status(400).json({ error: 'Products data is required' });
@@ -44,17 +44,21 @@ async function uploadProducts(req, res) {
         });
     }
 
+    // Default to inventory 1 if not specified
+    const targetInventoryId = inventory_id ? parseInt(inventory_id) : 1;
+
     try {
         // Insert products in transaction
         const inserted = await runInTransaction(async () => {
             for (const product of validProducts) {
-                await queries.insertProduct(product);
+                await queries.insertProduct(product, targetInventoryId);
             }
             return validProducts.length;
         });
 
-        // Invalidate cache
+        // Invalidate cache (both general and inventory-specific)
         cache.invalidate('inventory_count');
+        cache.invalidate(`inventory_count_${targetInventoryId}`);
 
         // Send immediate notification about products added
         activityMonitor.notifyProductAdded(inserted);
@@ -73,17 +77,18 @@ async function uploadProducts(req, res) {
 
 // Get all products or filter by status
 async function getProducts(req, res) {
-    const { status } = req.query;
+    const { status, inventory_id } = req.query;
 
     try {
         let products;
+        const inventoryId = inventory_id ? parseInt(inventory_id) : null;
 
         if (status === 'available') {
-            products = await queries.getProductsByStatus(0);
+            products = await queries.getProductsByStatus(0, inventoryId);
         } else if (status === 'sold') {
-            products = await queries.getProductsByStatus(1);
+            products = await queries.getProductsByStatus(1, inventoryId);
         } else {
-            products = await queries.getAllProducts();
+            products = await queries.getAllProducts(inventoryId);
         }
 
         res.json({ products });
@@ -155,9 +160,12 @@ async function bulkDeleteProducts(req, res) {
 // Get statistics
 async function getStats(req, res) {
     try {
-        const stats = await queries.getStats();
-        const recentUploads = await queries.getRecentUploads();
-        const recentSales = await queries.getRecentSales();
+        const { inventory_id } = req.query;
+        const inventoryId = inventory_id ? parseInt(inventory_id) : null;
+
+        const stats = await queries.getStats(inventoryId);
+        const recentUploads = await queries.getRecentUploads(inventoryId);
+        const recentSales = await queries.getRecentSales(inventoryId);
 
         res.json({
             stats: {
